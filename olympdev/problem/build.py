@@ -18,6 +18,10 @@ from olympdev.resources import asset_file
 from olympdev.settings import Settings, get_settings, language_for_source
 from olympdev.storage import AbstractStorage
 from olympdev.worker.pipelines.problem_testing import CompileSpec, ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_verification import (
+    ProblemVerificationPipeline,
+    SolutionVerificationSpec,
+)
 from olympdev.worker.roles import ROLE_SPECS, ProgramRole
 
 TESTLIB_HEADER = "testlib.h"
@@ -99,3 +103,70 @@ def build_problem_testing_input(
             problem_dir=package.directory,
             problem_name=problem_name or package.name,
         )
+
+
+def _resolve_verifiable(
+    package: ProblemPackage, solution: ProblemSolution | str
+) -> ProblemSolution:
+    resolved = package.solution(solution) if isinstance(solution, str) else solution
+    if resolved.is_ignored():
+        raise ValueError(
+            f"{package.name}: solution tagged {resolved.tag!r} is ignored"
+        )
+    return resolved
+
+
+def build_solution_verification_input(
+    storage: AbstractStorage,
+    package: ProblemPackage,
+    *,
+    solution: ProblemSolution | str,
+    settings: Settings | None = None,
+    problem_name: str | None = None,
+) -> str:
+    """Upload one solution's testing input plus its tag for verification."""
+    settings = settings or get_settings()
+    resolved = _resolve_verifiable(package, solution)
+    testing_digest = build_problem_testing_input(
+        storage,
+        package,
+        solution=resolved,
+        settings=settings,
+        problem_name=problem_name,
+    )
+    return ProblemVerificationPipeline.make_input_digest(
+        storage,
+        solutions=[
+            SolutionVerificationSpec(tag=resolved.tag, testing_digest=testing_digest)
+        ],
+    )
+
+
+def build_problem_verification_input(
+    storage: AbstractStorage,
+    package: ProblemPackage,
+    *,
+    settings: Settings | None = None,
+    problem_name: str | None = None,
+) -> str:
+    """Upload every non-ignored solution for a full-problem verification run."""
+    settings = settings or get_settings()
+    solutions = package.verifiable_solutions()
+    if not solutions:
+        raise ValueError(f"{package.name}: no solutions to verify")
+    return ProblemVerificationPipeline.make_input_digest(
+        storage,
+        solutions=[
+            SolutionVerificationSpec(
+                tag=item.tag,
+                testing_digest=build_problem_testing_input(
+                    storage,
+                    package,
+                    solution=item,
+                    settings=settings,
+                    problem_name=problem_name,
+                ),
+            )
+            for item in solutions
+        ],
+    )

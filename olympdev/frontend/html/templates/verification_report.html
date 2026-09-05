@@ -1,0 +1,54 @@
+<article class="od od-card is-{{ view.match_text }}">
+    {% include "_base.css" %}
+    <header class="od-head">
+        <div>
+            <p class="od-kicker">verify</p>
+            <h2>{{ view.problem_name or "problem" }}</h2>
+        </div>
+        <span class="od-badge od-v-{{ view.match_text }}">{{ view.match_text }}</span>
+    </header>
+    {% if view.failure_reason %}
+    <p class="od-v-WA" style="margin:8px 0 0">{{ view.failure_reason }}</p>
+    {% endif %}
+    <div class="od-scroll" style="margin-top:12px">
+    <table class="od-grid">
+        <thead>
+            <tr>
+                <th>Test</th>
+                {% for column in view.columns %}
+                <th>
+                    <div class="od-strong">{{ column.name }}</div>
+                    {% if column.tag %}<div class="od-muted">{{ column.tag }}</div>{% endif %}
+                    <div class="od-head-meta">
+                        <span class="od-badge od-v-{{ column.verdict.value if column.verdict else 'idle' }}">{{ column.verdict_text }}</span>
+                        <span class="od-badge od-v-{{ column.match_text }}">{{ column.match_text }}</span>
+                    </div>
+                    <div class="od-muted">cpu/wall {{ column.time_text }}</div>
+                    {% if column.reason %}<div class="od-muted">{{ column.reason }}</div>{% endif %}
+                </th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, cells in view.rows() %}
+            <tr>
+                <th class="od-test-name">{{ name }}</th>
+                {% for cell in cells %}
+                {% if cell %}
+                <td>
+                    <div class="od-cell">
+                        <span class="od-badge od-v-{{ cell.verdict.value }}">{{ cell.verdict.value }}</span>
+                        <span class="od-muted">{{ cell.usage.time_text }}</span>
+                        <span class="od-muted">{{ cell.usage.memory_text }}</span>
+                    </div>
+                </td>
+                {% else %}<td class="od-muted">—</td>{% endif %}
+                {% endfor %}
+            </tr>
+            {% else %}
+            <tr><td class="od-muted" colspan="{{ view.columns | length + 1 }}">no tests</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</article>

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from olympdev.isolate import IsolateFactory
-from olympdev.problem.build import build_problem_testing_input
+from olympdev.problem.build import build_problem_testing_input, build_problem_verification_input
 from olympdev.problem.package import ProblemPackage
 from olympdev.storage.filestorage import FileStorage
 from olympdev.worker.job import JobStatus
@@ -18,6 +18,7 @@ from olympdev.worker.pipeline import (
     run_pipeline,
 )
 from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_verification import ProblemVerificationPipeline
 from olympdev.worker.roles import ProgramRole
 from olympdev.worker.verdict import Verdict
 
@@ -293,3 +294,29 @@ def test_aplusb_starts_next_test_while_model_generates_answer(
     assert isinstance(gen5, ScheduledJob)
     assert gen5.job.job_id == "gen-5"
     assert pipeline.get_next_job(context) is NextJobStatus.WAITING
+
+
+def test_aplusb_solutions_match_their_tags(
+    storage: FileStorage,
+    isolate_factory: IsolateFactory,
+    aplusb_dir: Path,
+):
+    package = ProblemPackage.load(aplusb_dir)
+    if shutil.which("g++") is None:
+        pytest.skip("g++ is not available")
+    digest = build_problem_verification_input(storage, package)
+    pipeline = ProblemVerificationPipeline("aplusb-verify")
+    run_pipeline(
+        pipeline,
+        PipelineContext(
+            input_digest=digest,
+            storage=storage,
+            isolate_factory=isolate_factory,
+        ),
+    )
+    assert pipeline.get_status() is PipelineStatus.COMPLETED
+    result = pipeline.get_result(storage)
+    assert result is not None
+    assert result.matched is True
+    assert [item.tag for item in result.solutions] == ["main", "WA", "TL"]
+    assert all(item.matched and item.reason is None for item in result.solutions)

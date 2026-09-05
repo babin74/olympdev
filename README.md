@@ -15,6 +15,7 @@ pip install -e ".[notebook]"     # без extra — только ядро, бе�
 
 olympdev compare example-contest         # все решения задачи, матрица тест × решение
 olympdev run example-contest --solution WA
+olympdev verify example-contest          # решения соответствуют своим тегам
 ```
 
 ```
@@ -158,6 +159,7 @@ p = wb.problem("aplusb")
 p.run("main")               # PipelineRunView, рисует себя сам
 p.run("TL", trace=True)     # карточки job'ов по мере выполнения
 p.compare()                 # матрица тест × решение, общий кеш между решениями
+p.verify()                  # все решения сверяются с тегами
 ```
 
 `Workbench` владеет хранилищем, пулом песочниц, executor'ом и кешем. Пример —
@@ -169,6 +171,7 @@ p.compare()                 # матрица тест × решение, общ�
 |---|---|
 | `olympdev run <target> [--solution TAG] [--jobs N]` | прогон задачи или контеста |
 | `olympdev compare <target> [--solutions ...]` | матрица тест × решение |
+| `olympdev verify <target> [--solution TAG]` | сверка решений с тегами |
 | `olympdev compile-commands <target>` | compilation database для clangd/IDE |
 | `olympdev show <digest>` | содержимое блоба из хранилища |
 | `olympdev config` | действующие настройки и их источник |
@@ -184,11 +187,26 @@ p.compare()                 # матрица тест × решение, общ�
 { "problems": ["aplusb"] }
 ```
 
-У задачи — `info.json`: `time_limit_ms`, `memory_limit_mb`, решения
-(`main` / `WA` / `TL` / …), исходники (`gen`, `check`, `valid`), сэмплы и тесты.
-Тест — либо файл (`input_file`), либо генерация (`gen_cmd` + `name`). Тег `main`
-обязателен, если решения перечислены; теги и типы исходников не должны
-повторяться.
+У задачи — `info.json`: `time_limit_ms`, `memory_limit_mb`, решения, исходники
+(`gen`, `check`, `valid`), сэмплы и тесты. Тест — либо файл (`input_file`), либо
+генерация (`gen_cmd` + `name`). Тег `main` обязателен, если решения перечислены;
+теги и типы исходников не должны повторяться.
+
+Тег решения задаёт, какие вердикты допустимы при верификации (`olympdev verify`
+/ `p.verify()`):
+
+- `main` / `OK` — на всех тестах только `OK`; `main` ещё и эталон, если у теста
+  нет файла с ответом
+- `WA`, `TL`, `ML`, `RE`, `PT` — этот вердикт обязан встретиться; `OK` тоже
+  разрешён; остальные вердикты — несоответствие тегу
+- `Q1+Q2+…+Qn` — токен `XX` (predictable error: `WA`/`TL`/`ML`/`RE`/`PT`)
+  обязателен, `XX?` (любой двухбуквенный вердикт) необязателен. `OK` всегда
+  разрешён. Пример: `TL+ML?` обязан получить `TL` и может получить `ML`
+- `incor` — хотя бы один predictable error, конкретный не важен
+- `ignore` — решение не запускается
+
+Predictable error — решение успешно прогнали (скомпилировалось, не `FL`/`CF`)
+и оно не `OK`.
 
 В пакет входят `testlib.h` и `olymp.sty`.
 

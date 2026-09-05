@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from olympdev.problem.build import build_problem_testing_input, compile_spec
+from olympdev.problem.build import (
+    build_problem_testing_input,
+    build_problem_verification_input,
+    build_solution_verification_input,
+    compile_spec,
+)
 from olympdev.problem.package import Contest, ProblemPackage, load_target
 from olympdev.problem.types import ProblemConfiguration, ProblemSourceType
 from olympdev.storage.filestorage import FileStorage
@@ -190,3 +195,79 @@ def test_build_input_selects_a_solution_by_tag(storage: FileStorage, contest_dir
     )
     main = build_problem_testing_input(storage, package)
     assert wa != main
+
+
+def _minimal_problem(tmp_path: Path, *, solutions: list[dict]) -> None:
+    (tmp_path / "a.in").write_bytes(b"")
+    (tmp_path / "a.out").write_bytes(b"")
+    (tmp_path / "check.cpp").write_bytes(b"")
+    for item in solutions:
+        (tmp_path / item["file"]).write_bytes(b"")
+    (tmp_path / "info.json").write_text(json.dumps({
+        "time_limit_ms": 1000,
+        "memory_limit_mb": 64,
+        "tests": [{"input_file": "a.in", "output_file": "a.out"}],
+        "solutions": solutions,
+        "sources": [{"file": "check.cpp", "type": "check"}],
+    }))
+
+
+def test_ignore_solutions_are_skipped_by_problem_verification(
+    storage: FileStorage, tmp_path: Path
+):
+    _minimal_problem(
+        tmp_path,
+        solutions=[
+            {"file": "sol.cpp", "tag": "main"},
+            {"file": "skip.cpp", "tag": "ignore"},
+        ],
+    )
+    package = ProblemPackage.load(tmp_path)
+    assert [item.tag for item in package.verifiable_solutions()] == ["main"]
+    digest = build_problem_verification_input(storage, package)
+    arguments = storage.download_dictionary(digest)
+    assert [item["tag"] for item in arguments["solutions"]] == ["main"]
+    assert storage.exists(arguments["solutions"][0]["testing_digest"])
+
+
+def test_build_solution_verification_rejects_ignore(
+    storage: FileStorage, tmp_path: Path
+):
+    _minimal_problem(
+        tmp_path,
+        solutions=[
+            {"file": "sol.cpp", "tag": "main"},
+            {"file": "skip.cpp", "tag": "ignore"},
+        ],
+    )
+    package = ProblemPackage.load(tmp_path)
+    with pytest.raises(ValueError, match="ignored"):
+        build_solution_verification_input(storage, package, solution="ignore")
+
+
+def test_build_solution_verification_wraps_testing_input(
+    storage: FileStorage, contest_dir: Path
+):
+    package = ProblemPackage.load(contest_dir / "aplusb")
+    digest = build_solution_verification_input(storage, package, solution="WA")
+    arguments = storage.download_dictionary(digest)
+    assert [item["tag"] for item in arguments["solutions"]] == ["WA"]
+    assert storage.exists(arguments["solutions"][0]["testing_digest"])
+
+
+def test_build_problem_verification_includes_every_runnable_solution(
+    storage: FileStorage, contest_dir: Path
+):
+    package = ProblemPackage.load(contest_dir / "aplusb")
+    digest = build_problem_verification_input(storage, package)
+    arguments = storage.download_dictionary(digest)
+    assert [item["tag"] for item in arguments["solutions"]] == ["main", "WA", "TL"]
+
+
+def test_problem_verification_requires_a_runnable_solution(
+    storage: FileStorage, tmp_path: Path
+):
+    _minimal_problem(tmp_path, solutions=[])
+    package = ProblemPackage.load(tmp_path)
+    with pytest.raises(ValueError, match="no solutions to verify"):
+        build_problem_verification_input(storage, package)

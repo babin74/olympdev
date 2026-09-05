@@ -14,6 +14,7 @@ from olympdev.frontend.view import (
     TestingReportView,
     TestRowView,
     UsageView,
+    VerificationReportView,
 )
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "TestRowView",
     "TestingReportView",
     "UsageView",
+    "VerificationReportView",
     "Workbench",
 ]

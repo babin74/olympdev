@@ -16,7 +16,7 @@ from typing import Any
 
 from olympdev.frontend import text as text_view
 from olympdev.frontend.notebook import Workbench
-from olympdev.frontend.view import PipelineRunView, TestingReportView
+from olympdev.frontend.view import PipelineRunView, TestingReportView, VerificationReportView
 from olympdev.settings import Settings, get_settings, load_settings, set_settings
 from olympdev.storage import open_storage
 
@@ -28,6 +28,8 @@ def _write_html(view: Any, path: Path) -> None:
         markup = html_view.render_testing_report(view)
     elif isinstance(view, PipelineRunView):
         markup = html_view.render_pipeline_run(view)
+    elif isinstance(view, VerificationReportView):
+        markup = html_view.render_verification_report(view)
     else:  # pragma: no cover - guarded by the subcommands
         raise TypeError(f"no HTML renderer for {type(view).__name__}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,6 +64,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
     view = workbench.problem(name).compare(args.solutions or None)
     _emit(view, args, text_view.render_testing_report(view))
     return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    workbench = _workbench(args)
+    names = [args.problem] if args.problem else workbench.problems()
+    failed = False
+    for name in names:
+        view = workbench.problem(name).verify(args.solution)
+        _emit(view, args, text_view.render_verification_report(view))
+        failed = failed or not view.matched
+    return 1 if failed else 0
 
 
 def cmd_compile_commands(args: argparse.Namespace) -> int:
@@ -135,6 +148,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--solutions", nargs="*", help="solution tags to include")
     compare.set_defaults(func=cmd_compare)
 
+    verify = subparsers.add_parser(
+        "verify", help="check prepared solutions against their tags"
+    )
+    add_target(verify)
+    verify.add_argument(
+        "--solution", default=None, help="verify one tag (default: every non-ignored solution)"
+    )
+    verify.set_defaults(func=cmd_verify)
+
     compile_commands = subparsers.add_parser(
         "compile-commands", help="generate a compilation database for an IDE"
     )
@@ -156,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.config is not None:
         set_settings(load_settings(args.config))
-    if getattr(args, "jobs", None) is None and args.command in {"run", "compare"}:
+    if getattr(args, "jobs", None) is None and args.command in {"run", "compare", "verify"}:
         args.jobs = get_settings().isolate.sandbox_count
     try:
         return args.func(args)

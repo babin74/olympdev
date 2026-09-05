@@ -1,7 +1,12 @@
-<section class="od">
+<article class="od od-card">
     {% include "_base.css" %}
-    {% if view.problem_name %}<h2 style="margin:0 0 8px">{{ view.problem_name }}</h2>{% endif %}
-    <div class="od-scroll">
+    <header class="od-head">
+        <div>
+            <p class="od-kicker">compare</p>
+            <h2>{{ view.problem_name or "problem" }}</h2>
+        </div>
+    </header>
+    <div class="od-scroll" style="margin-top:12px">
     <table class="od-grid">
         <thead>
             <tr>
@@ -10,7 +15,9 @@
                 <th>
                     <div class="od-strong">{{ column.name }}</div>
                     {% if column.tag %}<div class="od-muted">{{ column.tag }}</div>{% endif %}
-                    <div class="od-strong od-v-{{ column.verdict_text }}">{{ column.verdict_text }}</div>
+                    <div class="od-head-meta">
+                        <span class="od-badge od-v-{{ column.verdict.value if column.verdict else 'idle' }}">{{ column.verdict_text }}</span>
+                    </div>
                     <div class="od-muted">cpu/wall {{ column.time_text }}</div>
                 </th>
                 {% endfor %}
@@ -23,9 +30,11 @@
                 {% for cell in cells %}
                 {% if cell %}
                 <td>
-                    <div class="od-strong od-v-{{ cell.verdict.value }}">{{ cell.verdict.value }}</div>
-                    <div class="od-muted">{{ cell.usage.time_text }}</div>
-                    <div class="od-muted">{{ cell.usage.memory_text }}</div>
+                    <div class="od-cell">
+                        <span class="od-badge od-v-{{ cell.verdict.value }}">{{ cell.verdict.value }}</span>
+                        <span class="od-muted">{{ cell.usage.time_text }}</span>
+                        <span class="od-muted">{{ cell.usage.memory_text }}</span>
+                    </div>
                 </td>
                 {% else %}<td class="od-muted">—</td>{% endif %}
                 {% endfor %}
@@ -36,4 +45,4 @@
         </tbody>
     </table>
     </div>
-</section>
+</article>

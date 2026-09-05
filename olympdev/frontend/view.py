@@ -20,6 +20,7 @@ from olympdev.worker.job import AbstractJob, JobStatus
 from olympdev.worker.pipeline import AbstractPipeline, PipelineStatus
 from olympdev.worker.pipelines.problem_test import ProblemTestResult
 from olympdev.worker.pipelines.problem_testing import ProblemTestingResult
+from olympdev.worker.pipelines.problem_verification import ProblemVerificationResult
 from olympdev.worker.verdict import Verdict
 
 if TYPE_CHECKING:
@@ -246,11 +247,19 @@ class SolutionColumnView(FrozenModel):
     tag: str | None = None
     verdict: Verdict | None = None
     wall_seconds: float | None = None
+    matched: bool | None = None
+    reason: str | None = None
     tests: list[TestRowView] = []
 
     @property
     def verdict_text(self) -> str:
         return "—" if self.verdict is None else self.verdict.value
+
+    @property
+    def match_text(self) -> str:
+        if self.matched is None:
+            return "—"
+        return "match" if self.matched else "mismatch"
 
     @property
     def cpu_seconds(self) -> float | None:
@@ -321,3 +330,93 @@ def solution_column(
             else [TestRowView.from_result(storage, test) for test in result.tests]
         ),
     )
+
+
+class VerificationReportView(FrozenModel):
+    """Verification of prepared solutions against their tags."""
+
+    matched: bool
+    status: PipelineStatus
+    problem_name: str | None = None
+    failure_reason: str | None = None
+    wall_seconds: float | None = None
+    jobs: list[JobView] = []
+    test_names: list[str] = []
+    columns: list[SolutionColumnView] = []
+
+    @classmethod
+    def from_pipeline(
+        cls,
+        pipeline: AbstractPipeline,
+        storage: AbstractStorage,
+        *,
+        problem_name: str | None = None,
+        wall_seconds: float | None = None,
+        jobs: list[JobView] | None = None,
+    ) -> Self:
+        result = _verification_result(pipeline, storage)
+        columns: list[SolutionColumnView] = []
+        if result is not None:
+            for solution in result.solutions:
+                testing = ProblemTestingResult.from_storage(
+                    storage, solution.testing_digest
+                )
+                columns.append(
+                    SolutionColumnView(
+                        name=solution.tag,
+                        tag=solution.tag,
+                        verdict=None if testing is None else testing.verdict,
+                        matched=solution.matched,
+                        reason=solution.reason,
+                        tests=(
+                            []
+                            if testing is None
+                            else [
+                                TestRowView.from_result(storage, test)
+                                for test in testing.tests
+                            ]
+                        ),
+                    )
+                )
+        names: list[str] = []
+        for column in columns:
+            if len(column.tests) > len(names):
+                names = [test.name for test in column.tests]
+        return cls(
+            matched=False if result is None else result.matched,
+            status=pipeline.get_status(),
+            problem_name=problem_name,
+            failure_reason=(
+                None
+                if pipeline.get_failure_reason() is None
+                else str(pipeline.get_failure_reason())
+            ),
+            wall_seconds=wall_seconds,
+            jobs=jobs or [],
+            test_names=names,
+            columns=columns,
+        )
+
+    @property
+    def match_text(self) -> str:
+        return "match" if self.matched else "mismatch"
+
+    def rows(self) -> list[tuple[str, list[TestRowView | None]]]:
+        return [
+            (name, [column.test(index) for column in self.columns])
+            for index, name in enumerate(self.test_names)
+        ]
+
+    def _repr_html_(self) -> str:
+        from olympdev.frontend.html import render_verification_report
+
+        return render_verification_report(self)
+
+
+def _verification_result(
+    pipeline: AbstractPipeline, storage: AbstractStorage
+) -> ProblemVerificationResult | None:
+    digest = pipeline.get_output_digest()
+    if digest is None:
+        return None
+    return ProblemVerificationResult.from_storage(storage, digest)

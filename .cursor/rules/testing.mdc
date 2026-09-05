@@ -1,0 +1,21 @@
+---
+description: Test conventions for olympdev
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+Full guide: @CLAUDE.md
+
+- Mark anything that compiles or opens a sandbox as `slow`;
+  `pytest tests -m "not slow"` must stay fast and green.
+- A `pytest_collection_modifyitems` hook receives the **whole session's**
+  items. Filter to your own directory — marking everything once made
+  `-m "not slow"` select nothing at all.
+- Pin settings with `using_settings(...)`; the autouse `default_settings`
+  fixture keeps a host's real `olympdev.toml` out of the tests.
+- Assert behaviour, not shape: verdicts and issued jobs rather than argument
+  dict layout, and never assume the on-disk blob layout (blobs are sharded).
+- A new pipeline needs a `save_state()` → `restore()` round-trip test that
+  asserts no job is issued twice.
+- Adversarial payloads go through the real `ProblemTestingPipeline` in
+  `tests/attacks/`, never run on the host directly.

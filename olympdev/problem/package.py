@@ -87,6 +87,10 @@ class ProblemPackage:
     def solutions(self) -> list[ProblemSolution]:
         return list(self.configuration.solutions)
 
+    def verifiable_solutions(self) -> list[ProblemSolution]:
+        """Solutions that verification should run; skips ``ignore``."""
+        return [solution for solution in self.solutions() if not solution.is_ignored()]
+
     # --- roles ---------------------------------------------------------
 
     def role_files(self, *, solution: Path | bytes | str | None = None) -> dict[

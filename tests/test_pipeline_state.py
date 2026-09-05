@@ -21,6 +21,10 @@ from olympdev.worker.pipeline import (
     run_pipeline,
 )
 from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_verification import (
+    ProblemVerificationPipeline,
+    SolutionVerificationSpec,
+)
 from olympdev.worker.verdict import Verdict
 
 from test_problem_testing_pipeline import _configuration, _make_digest
@@ -139,3 +143,62 @@ def test_state_records_children_of_each_test(
     assert child.status is PipelineStatus.COMPLETED
     assert {"run", "check"} <= set(child.steps)
     assert all(step.output_digest is not None for step in child.steps.values())
+
+
+def _verification_digest(
+    storage: FileStorage,
+    test_assets_path: Path,
+    configuration,
+    problem_dir: Path,
+) -> str:
+    testing_digest = _make_digest(
+        storage, test_assets_path, configuration, problem_dir
+    )
+    return ProblemVerificationPipeline.make_input_digest(
+        storage,
+        solutions=[
+            SolutionVerificationSpec(tag="main", testing_digest=testing_digest)
+        ],
+    )
+
+
+def test_verification_pipeline_roundtrips_without_repeating_work(
+    storage: FileStorage, isolate_factory, test_assets_path: Path, tmp_path: Path
+):
+    configuration = _configuration(tmp_path)
+    input_digest = _verification_digest(
+        storage, test_assets_path, configuration, tmp_path
+    )
+    context = _context(storage, isolate_factory, input_digest)
+
+    original = ProblemVerificationPipeline("restartable-verify")
+    executed_before = []
+    while True:
+        nxt = original.get_next_job(context)
+        assert isinstance(nxt, ScheduledJob)
+        nxt.job.execute(context.job_context(nxt.input_digest))
+        executed_before.append(nxt.job.job_id)
+        if not nxt.job.job_id.startswith("compile-"):
+            break
+
+    restored = _roundtrip(original, storage, input_digest)
+    assert isinstance(restored, ProblemVerificationPipeline)
+    assert restored.pipeline_id == "restartable-verify"
+    child = restored.children()[0].pipeline
+    assert isinstance(child, ProblemTestingPipeline)
+    assert child.has_step("compile-solution")
+
+    executed_after = []
+    while True:
+        nxt = restored.get_next_job(context)
+        if nxt is NextJobStatus.FINISHED:
+            break
+        assert isinstance(nxt, ScheduledJob), nxt
+        nxt.job.execute(context.job_context(nxt.input_digest))
+        executed_after.append(nxt.job.job_id)
+
+    assert restored.get_status() is PipelineStatus.COMPLETED
+    result = restored.get_result(storage)
+    assert result is not None and result.matched is True
+    assert result.solutions[0].tag == "main"
+    assert not set(executed_before) & set(executed_after)

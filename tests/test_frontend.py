@@ -20,6 +20,7 @@ from olympdev.frontend.view import (
     TestingReportView,
     TestRowView,
     UsageView,
+    VerificationReportView,
     format_duration,
     format_memory,
 )
@@ -170,6 +171,58 @@ def test_html_renders_the_same_view_model():
     assert "aplusb" in markup
     assert "sol-ac.cpp" in markup
     assert "od-v-OK" in markup, "verdict colour comes from the shared stylesheet"
+    assert "od-card" in markup
+    assert "od-badge" in markup
+
+
+def _verification_report() -> VerificationReportView:
+    column = SolutionColumnView(
+        name="main",
+        tag="main",
+        verdict=Verdict.OK,
+        matched=True,
+        tests=[
+            TestRowView(
+                name="sample-01.txt",
+                verdict=Verdict.OK,
+                usage=UsageView(cpu_ms=4.0, wall_ms=5.0, memory_kb=2048),
+            )
+        ],
+    )
+    mismatch = SolutionColumnView(
+        name="WA",
+        tag="WA",
+        verdict=Verdict.OK,
+        matched=False,
+        reason="missing required verdict WA",
+    )
+    return VerificationReportView(
+        matched=False,
+        status=PipelineStatus.COMPLETED,
+        problem_name="aplusb",
+        test_names=["sample-01.txt"],
+        columns=[column, mismatch],
+    )
+
+
+def test_text_verification_report_shows_match_and_reason():
+    rendered = text_view.render_verification_report(_verification_report())
+    assert "aplusb: mismatch" in rendered
+    assert "main [OK, match]" in rendered
+    assert "WA [OK, mismatch]" in rendered
+    assert "missing required verdict WA" in rendered
+
+
+def test_html_verification_report_uses_the_view_model():
+    from olympdev.frontend import html as html_view
+
+    markup = html_view.render_verification_report(_verification_report())
+    assert "aplusb" in markup
+    assert "od-v-match" in markup
+    assert "od-v-mismatch" in markup
+    assert "od-card" in markup
+    assert "od-badge" in markup
+    assert "missing required verdict WA" in markup
 
 
 def test_html_escapes_untrusted_text():
@@ -189,6 +242,8 @@ def test_html_escapes_untrusted_text():
 
 def test_views_render_themselves_in_a_notebook():
     assert "<table" in _report()._repr_html_()
+    assert "od-card" in _report()._repr_html_()
+    assert "od-card" in _verification_report()._repr_html_()
     assert "od-card" in PipelineRunView(
         pipeline_id="p", status=PipelineStatus.COMPLETED
     )._repr_html_()

@@ -5,6 +5,7 @@ from olympdev.frontend.html.job import (
     render_job,
     render_pipeline_run,
     render_testing_report,
+    render_verification_report,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "render_job",
     "render_pipeline_run",
     "render_testing_report",
+    "render_verification_report",
 ]

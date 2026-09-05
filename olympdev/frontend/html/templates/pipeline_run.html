@@ -24,7 +24,7 @@
             {% for test in view.tests %}
             <tr>
                 <td class="od-test-name">{{ test.name }}</td>
-                <td class="od-strong od-v-{{ test.verdict.value }}">{{ test.verdict.value }}</td>
+                <td><span class="od-badge od-v-{{ test.verdict.value }}">{{ test.verdict.value }}</span></td>
                 <td>{{ test.usage.time_text }}</td>
                 <td>{{ test.usage.memory_text }}</td>
             </tr>

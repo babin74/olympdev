@@ -1,0 +1,46 @@
+---
+description: Layering, pipelines, roles, jobs and sandbox rules for olympdev
+globs: olympdev/**/*.py
+alwaysApply: false
+---
+
+Full guide: @CLAUDE.md — read it before adding a pipeline, a role or a job.
+
+## Which side does this code belong to
+
+- **Submitter side** (`problem/`, `frontend/`) has the problem directory and
+  host paths.
+- **Worker side** (`worker/`, `isolate/`) has digests only, and must run on a
+  machine that has never seen the problem's files.
+
+`problem/build.py` is the single crossing point. A `Path` on the worker side is
+almost always a mistake. Layer order: `settings` → `schema`/`storage` →
+`isolate` → `worker` → `problem` → `frontend`; nothing in `worker/` may import
+`problem.package` or `problem.build`.
+
+## New pipeline
+
+Accessors on `ProblemPackage` (disk knowledge only) → `build_<x>_input()` in
+`problem/build.py` (owns every disk touch) → the pipeline in `worker/pipelines/`
+with a stable `pipeline_type`, taking already-resolved data.
+
+Keep **all** decision state in the step table (`issue`/`step`/`has_step`/
+`step_in_flight`/`step_result`) and child registry. Anything else must be a
+cache re-derivable from storage, or `save_state()`/`restore()` loses work. Add
+a state round-trip test.
+
+## Never
+
+- Add parameters to `IsolateSandBox.run()` — change a profile in
+  `isolate/profiles.py`. No `full_env`, no per-call mounts, no flag that skips
+  a memory limit.
+- Derive a module-level constant from settings — caps are checked when a value
+  is built, so a constant makes a tight config fail at import. Use a function.
+- Change or reuse a `job_type` / `pipeline_type` string or a stored dict key:
+  they are on-disk format.
+- Trust stored job input on the worker. Re-validate every digest
+  (`storage.validate_digest`) and every sandbox path (`sandbox_relpath`).
+- Hand-write role job subclasses — add one entry to `ROLE_SPECS`.
+- Copy a driver loop to observe a run — implement `PipelineObserver`.
+- Import jinja2 from `frontend/view.py` or `frontend/text.py`: the core install
+  has no jinja2.

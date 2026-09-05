@@ -9,6 +9,93 @@ from olympdev.schema import FrozenModel
 from olympdev.settings import check_limit_range, get_settings
 from olympdev.worker.verdict import Verdict
 
+#: Solution was tested successfully and is not OK. CE/FL/CF are not these.
+PREDICTABLE_ERRORS = frozenset(
+    {Verdict.WA, Verdict.TL, Verdict.ML, Verdict.RE, Verdict.PT}
+)
+
+_VERDICT_BY_CODE = {verdict.value: verdict for verdict in Verdict}
+_PERMISSIBLE_ORDER = (
+    Verdict.OK,
+    Verdict.WA,
+    Verdict.TL,
+    Verdict.ML,
+    Verdict.RE,
+    Verdict.PT,
+    Verdict.CE,
+    Verdict.FL,
+    Verdict.CF,
+)
+
+
+def _ordered_verdicts(verdicts: set[Verdict]) -> tuple[Verdict, ...]:
+    return tuple(verdict for verdict in _PERMISSIBLE_ORDER if verdict in verdicts)
+
+
+class SolutionTagExpectation(FrozenModel):
+    """What a solution tag claims about the verdicts it may and must produce."""
+
+    permissible: tuple[Verdict, ...] = ()
+    required: tuple[Verdict, ...] = ()
+    require_any_predictable: bool = False
+    ignored: bool = False
+
+
+def parse_solution_tag(tag: str) -> SolutionTagExpectation:
+    """Parse a solution tag from info.json into expected and permitted verdicts."""
+    if tag == "ignore":
+        return SolutionTagExpectation(ignored=True)
+    if tag in ("main", "OK"):
+        return SolutionTagExpectation(permissible=(Verdict.OK,))
+    if tag == "incor":
+        return SolutionTagExpectation(
+            permissible=_ordered_verdicts({Verdict.OK, *PREDICTABLE_ERRORS}),
+            require_any_predictable=True,
+        )
+    parts = tag.split("+")
+    if not tag or any(not part for part in parts):
+        raise ValueError(f"invalid solution tag: {tag!r}")
+    permissible: set[Verdict] = {Verdict.OK}
+    required: list[Verdict] = []
+    seen: set[Verdict] = set()
+    for part in parts:
+        optional = part.endswith("?")
+        code = part[:-1] if optional else part
+        verdict = _VERDICT_BY_CODE.get(code)
+        if verdict is None:
+            raise ValueError(f"invalid solution tag: {tag!r}")
+        if verdict in seen:
+            raise ValueError(f"duplicate token {code!r} in solution tag: {tag!r}")
+        if not optional and verdict not in PREDICTABLE_ERRORS:
+            raise ValueError(f"invalid solution tag: {tag!r}")
+        seen.add(verdict)
+        permissible.add(verdict)
+        if not optional:
+            required.append(verdict)
+    return SolutionTagExpectation(
+        permissible=_ordered_verdicts(permissible),
+        required=tuple(required),
+    )
+
+
+def match_solution_tag(
+    expectation: SolutionTagExpectation, observed: list[Verdict]
+) -> str | None:
+    """Return a mismatch reason, or None if the observed verdicts fit the tag."""
+    if expectation.ignored:
+        return None
+    for verdict in observed:
+        if verdict not in expectation.permissible:
+            return f"unexpected verdict {verdict.value}"
+    seen = set(observed)
+    missing = [verdict for verdict in expectation.required if verdict not in seen]
+    if missing:
+        names = ", ".join(verdict.value for verdict in missing)
+        return f"missing required verdict {names}"
+    if expectation.require_any_predictable and not (seen & PREDICTABLE_ERRORS):
+        return "expected a predictable error (WA, TL, ML, RE or PT)"
+    return None
+
 
 def parse_gen_argv(gen_cmd: str) -> list[str]:
     """Split ``gen_cmd`` from info.json; drop the binary name, keep arguments."""
@@ -66,40 +153,30 @@ class ProblemSolution(FrozenModel):
 
     @model_validator(mode="after")
     def _check_tag(self) -> Self:
-        # will by changed to logic validation later (see TODO.md: Solution tag logic)
-        if self.tag not in ["main", "OK", "WA", "TL", "ML"]:
-            raise ValueError(f"invalid solution tag: {self.tag!r}")
+        parse_solution_tag(self.tag)
         return self
 
     def is_main_solution(self) -> bool:
         return self.tag == "main"
 
-    # TODO: add logic validation later (see TODO.md: Solution tag logic)
-    # Список разрешенных вердиктов для решения.
-    def get_permissible_verdicts(self) -> list[Verdict]:
-        res = [Verdict.OK]
-        if self.tag == "WA":
-            res.append(Verdict.WA)
-        if self.tag == "TL":
-            res.append(Verdict.TL)
-        if self.tag == "ML":
-            res.append(Verdict.ML)
-        if self.tag == "RE":
-            res.append(Verdict.RE)
-        return res
+    def is_ignored(self) -> bool:
+        return self.tag_expectation().ignored
 
-    # TODO: add logic validation later (see TODO.md: Solution tag logic)
-    # Один из этих вердиктов обязательно должен быть получен в ходе тестирования.
+    def tag_expectation(self) -> SolutionTagExpectation:
+        return parse_solution_tag(self.tag)
+
+    def get_permissible_verdicts(self) -> list[Verdict]:
+        """Verdicts this solution may produce on a test."""
+        return list(self.tag_expectation().permissible)
+
     def get_expected_verdicts(self) -> list[Verdict]:
-        if self.tag == "WA":
-            return [Verdict.WA]
-        if self.tag == "TL":
-            return [Verdict.TL]
-        if self.tag == "ML":
-            return [Verdict.ML]
-        if self.tag == "RE":
-            return [Verdict.RE]
-        return []
+        """Verdicts that must each appear at least once. Empty if none are required.
+
+        ``incor`` is different: nothing is individually required, but
+        ``tag_expectation().require_any_predictable`` demands some predictable
+        error. Optional tokens (``TL?``) never appear here.
+        """
+        return list(self.tag_expectation().required)
 
 
 class ProblemDevSettings(FrozenModel):

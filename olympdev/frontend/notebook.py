@@ -16,10 +16,15 @@ from olympdev.frontend.view import (
     JobView,
     PipelineRunView,
     TestingReportView,
+    VerificationReportView,
     solution_column,
 )
 from olympdev.isolate import IsolateFactory
-from olympdev.problem.build import build_problem_testing_input
+from olympdev.problem.build import (
+    build_problem_testing_input,
+    build_problem_verification_input,
+    build_solution_verification_input,
+)
 from olympdev.problem.package import Contest, ProblemPackage, load_target
 from olympdev.settings import Settings, get_settings
 from olympdev.storage import AbstractStorage, open_storage
@@ -28,6 +33,7 @@ from olympdev.worker.executor import JobExecutor
 from olympdev.worker.observer import NullObserver
 from olympdev.worker.pipeline import PipelineContext, run_pipeline
 from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_verification import ProblemVerificationPipeline
 from olympdev.worker.runner import run_pipeline_parallel
 
 
@@ -161,6 +167,65 @@ class ProblemWorkbench:
                 )
             )
         return TestingReportView.from_columns(columns, problem_name=self.name)
+
+    def verify(
+        self,
+        solution: Any = None,
+        *,
+        trace: bool = False,
+        jobs: int | None = None,
+        cache: AbstractCacheStorage | None = None,
+        pipeline_id: str | None = None,
+    ) -> VerificationReportView:
+        """Check prepared solutions against their tags.
+
+        With no argument, every non-ignored solution is verified. A tag
+        verifies that one solution.
+        """
+        observer = NotebookObserver(live=trace)
+        if solution is None:
+            digest = build_problem_verification_input(
+                self.workbench.storage,
+                self.package,
+                settings=self.workbench.settings,
+            )
+            ident = "verify"
+        else:
+            digest = build_solution_verification_input(
+                self.workbench.storage,
+                self.package,
+                solution=self._resolve(solution),
+                settings=self.workbench.settings,
+            )
+            ident = solution if isinstance(solution, str) else getattr(
+                solution, "tag", "verify"
+            )
+        pipeline = ProblemVerificationPipeline(pipeline_id or f"{self.name}-{ident}")
+        context = PipelineContext(
+            input_digest=digest,
+            storage=self.workbench.storage,
+            isolate_factory=self.workbench.isolate_factory,
+        )
+        executor = JobExecutor(cache if cache is not None else self.workbench.cache)
+        workers = jobs if jobs is not None else self.workbench.jobs
+        started = time.perf_counter()
+        if workers > 1:
+            run_pipeline_parallel(
+                pipeline,
+                context,
+                executor=executor,
+                observer=observer,
+                max_workers=workers,
+            )
+        else:
+            run_pipeline(pipeline, context, executor=executor, observer=observer)
+        return VerificationReportView.from_pipeline(
+            pipeline,
+            self.workbench.storage,
+            problem_name=self.name,
+            wall_seconds=time.perf_counter() - started,
+            jobs=observer.jobs,
+        )
 
 
 class Workbench:

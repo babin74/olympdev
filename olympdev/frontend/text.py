@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from olympdev.frontend.view import PipelineRunView, TestingReportView
+from olympdev.frontend.view import PipelineRunView, TestingReportView, VerificationReportView
 
 
 def _table(rows: list[list[str]], *, header: list[str]) -> str:
@@ -57,3 +57,32 @@ def render_testing_report(view: TestingReportView) -> str:
     rows.append(["cpu/wall"] + [column.time_text for column in view.columns])
     title = f"{view.problem_name}\n" if view.problem_name else ""
     return title + _table(rows, header=header)
+
+
+def render_verification_report(view: VerificationReportView) -> str:
+    head = f"{view.problem_name or 'verify'}: {view.match_text}"
+    if view.wall_seconds is not None:
+        head += f"  (wall {view.wall_seconds:.2f}s)"
+    header = ["test"] + [
+        f"{column.name} [{column.verdict_text}, {column.match_text}]"
+        for column in view.columns
+    ]
+    rows = [
+        [name]
+        + [
+            "—" if cell is None else f"{cell.verdict.value} {cell.usage.time_text}"
+            for cell in cells
+        ]
+        for name, cells in view.rows()
+    ]
+    if view.columns:
+        rows.append(["cpu/wall"] + [column.time_text for column in view.columns])
+    out = [head]
+    if view.failure_reason:
+        out.append(f"  failed: {view.failure_reason}")
+    if header:
+        out.append(_table(rows, header=header) if rows or view.columns else "")
+    for column in view.columns:
+        if column.reason:
+            out.append(f"  {column.tag}: {column.reason}")
+    return "\n".join(line for line in out if line)
