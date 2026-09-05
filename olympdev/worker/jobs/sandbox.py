@@ -4,9 +4,17 @@ import os
 import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import Any, ClassVar, Literal, overload
 
-from olympdev.isolate import IsolateLimits, IsolateMeta, STDERR_FILE, STDOUT_FILE, sandbox_relpath
+from olympdev.isolate import (
+    RUN_PROFILE,
+    IsolateLimits,
+    IsolateMeta,
+    STDERR_FILE,
+    STDOUT_FILE,
+    SandboxProfile,
+    sandbox_relpath,
+)
 from olympdev.schema import StorageModel
 from olympdev.storage import AbstractStorage
 from olympdev.worker.job import AbstractJob, JobContext, JobStatus, JOB_TYPE_KEY
@@ -199,6 +207,9 @@ def chmod_executable(path: Path) -> None:
 
 
 class SandboxRunJob(AbstractJob):
+    #: Sandbox profile this job's program runs under.
+    sandbox_profile: ClassVar[SandboxProfile] = RUN_PROFILE
+
     def get_result(self, storage: AbstractStorage) -> SandboxJobResult | None:
         digest = self.get_output_digest()
         if digest is None:
@@ -230,6 +241,7 @@ class SandboxRunJob(AbstractJob):
             meta = sandbox.run(
                 [f"./{binary_name}", *extra_args],
                 limits,
+                type(self).sandbox_profile,
                 stdin_file=stdin_file,
                 stdout_file=STDOUT_FILE,
                 stderr_file=STDERR_FILE,

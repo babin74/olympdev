@@ -4,9 +4,17 @@ import pytest
 from pydantic import ValidationError
 
 from olympdev.isolate.runner import IsolateSandBox, _build_init_args, _build_run_args
-from olympdev.isolate.types import (
+from olympdev.isolate._dir_rules import (
     IsolateDirectoryRule,
     IsolateDirectoryRules,
+)
+from olympdev.isolate.profiles import (
+    COMPILE_PROFILE,
+    RUN_PROFILE,
+    TOOL_PROFILE,
+    SandboxProfile,
+)
+from olympdev.isolate.types import (
     IsolateLimits,
     IsolateMeta,
     IsolateQuota,
@@ -55,15 +63,22 @@ def test_zero_memory_is_rejected():
         IsolateLimits(time_limit_ms=1000, memory_limit_mb=0)
 
 
-def test_build_run_args_includes_dir_rules_before_run():
-    rules = IsolateDirectoryRules(
-        allow_default_directories=False,
-        rules=[IsolateDirectoryRule(path_in_sandbox=Path("/opt"), path_on_host=Path("/opt"))],
+def test_build_run_args_includes_profile_dir_rules_before_run():
+    profile = SandboxProfile(
+        name="bound",
+        dir_rules=IsolateDirectoryRules(
+            allow_default_directories=False,
+            rules=[
+                IsolateDirectoryRule(
+                    path_in_sandbox=Path("/opt"), path_on_host=Path("/opt")
+                )
+            ],
+        ),
     )
     args = _build_run_args(
         IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
         ["/usr/bin/true"],
-        dir_rules=rules,
+        profile=profile,
         meta_path="/tmp/meta",
     )
     run_at = args.index("--run")
@@ -71,15 +86,38 @@ def test_build_run_args_includes_dir_rules_before_run():
     assert args.index("--dir=opt=/opt") < run_at
 
 
-def test_build_run_args_env_none_inherits():
+def test_profile_supplies_env_and_processes():
     args = _build_run_args(
         IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
         ["/usr/bin/true"],
-        env={"PATH": None, "HOME": "/box"},
+        profile=COMPILE_PROFILE,
         meta_path="/tmp/meta",
     )
-    assert "--env=PATH" in args
-    assert "--env=HOME=/box" in args
+    assert "--env=PATH=/usr/bin:/bin" in args
+    assert "--processes=64" in args
+
+
+def test_run_profile_is_single_process_with_no_environment():
+    args = _build_run_args(
+        IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
+        ["/usr/bin/true"],
+        profile=RUN_PROFILE,
+        meta_path="/tmp/meta",
+    )
+    assert "--processes=1" in args
+    assert not [arg for arg in args if arg.startswith("--env")]
+
+
+def test_host_environment_can_never_be_requested():
+    """isolate -e would hand the program the host environment; nothing emits it."""
+    for profile in (RUN_PROFILE, TOOL_PROFILE, COMPILE_PROFILE):
+        args = _build_run_args(
+            IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
+            ["/usr/bin/true"],
+            profile=profile,
+            meta_path="/tmp/meta",
+        )
+        assert "-e" not in args
 
 
 def test_build_run_args_zero_extra_time():
@@ -115,7 +153,7 @@ def test_env_key_with_equals_rejected():
         _build_run_args(
             IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
             ["/usr/bin/true"],
-            env={"FOO=BAR": "baz"},
+            profile=SandboxProfile(name="bad", env={"FOO=BAR": "baz"}),
             meta_path="/tmp/meta",
         )
 
@@ -187,3 +225,10 @@ def test_public_package_export():
     assert isolate_mod.IsolateQuota is IsolateQuota
     assert isolate_mod.sandbox_relpath is not None
     assert not hasattr(isolate_mod, "DEFAULT_DIRECTORY_RULES")
+    # Mounts are a profile decision; the grammar types stay private.
+    for name in (
+        "IsolateDirectoryRule",
+        "IsolateDirectoryRules",
+        "IsolateRemoveDirectoryRule",
+    ):
+        assert not hasattr(isolate_mod, name), name

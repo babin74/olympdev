@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from olympdev.isolate.types import (
+from olympdev.isolate._dir_rules import (
     IsolateDirectoryRule,
     IsolateDirectoryRules,
     IsolateRemoveDirectoryRule,

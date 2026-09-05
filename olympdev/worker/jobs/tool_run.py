@@ -1,11 +1,14 @@
 from pathlib import Path
+from typing import ClassVar
 
 from olympdev.isolate import (
     IsolateLimits,
     IsolateMeta,
     TOOL_BINARY,
+    TOOL_PROFILE,
     TOOL_RESERVED_PATHS,
     TOOL_STDIN,
+    SandboxProfile,
 )
 from olympdev.schema import FrozenModel
 from olympdev.storage import AbstractStorage
@@ -62,6 +65,7 @@ def _validate_command(command: list[str]) -> list[str]:
 
 class ToolRunJob(SandboxRunJob):
     job_type = "tool_run"
+    sandbox_profile: ClassVar[SandboxProfile] = TOOL_PROFILE
 
     def get_description(self) -> str:
         return "Run a tool (checker, validator, or generator)"

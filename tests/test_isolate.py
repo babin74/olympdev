@@ -3,12 +3,10 @@ import threading
 import time
 
 import pytest
+from olympdev.isolate.profiles import COMPILE_PROFILE
 from olympdev.isolate.runner import IsolateSandBox
 from olympdev.isolate.types import IsolateLimits
 from pathlib import Path
-
-# g++/collect2 need PATH to find `ld`; isolate clears the environment by default.
-COMPILER_ENV = {'PATH': '/usr/bin:/bin'}
 
 pytestmark = pytest.mark.slow
 
@@ -70,10 +68,9 @@ def test_compile_and_run(isolate_sandbox, test_assets_path: Path):
     compile_meta = isolate_sandbox.run(
         [gxx, '-O2', '-o', 'hello', 'hello.cpp'],
         IsolateLimits(time_limit_ms=10000, memory_limit_mb=512),
+        COMPILE_PROFILE,
         stdout_file='compile_stdout.txt',
         stderr_file='compile_stderr.txt',
-        processes=100,
-        env=COMPILER_ENV,
     )
 
     assert compile_meta.status == 'OK', isolate_sandbox.read_text('compile_stderr.txt')
@@ -100,10 +97,9 @@ def test_compile_and_run_memory(isolate_sandbox, test_assets_path: Path):
     compile_meta = isolate_sandbox.run(
         [gxx, '-O2', '-o', 'memory', 'memory.cpp'],
         IsolateLimits(time_limit_ms=10000, memory_limit_mb=512),
+        COMPILE_PROFILE,
         stdout_file='compile_stdout.txt',
         stderr_file='compile_stderr.txt',
-        processes=100,
-        env=COMPILER_ENV,
     )
 
     assert compile_meta.status == 'OK', isolate_sandbox.read_text('compile_stderr.txt')

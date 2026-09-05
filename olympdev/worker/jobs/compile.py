@@ -2,18 +2,17 @@ import re
 from pathlib import Path
 
 from olympdev.isolate import (
+    COMPILE_PROFILE,
     COMPILE_RESERVED_PATHS,
     IsolateLimits,
     IsolateMeta,
     sandbox_relpath,
 )
 from olympdev.schema import FrozenModel, StorageModel
+from olympdev.settings import Language, get_settings
 from olympdev.storage import AbstractStorage
 from olympdev.worker.cache.policy import CachePolicy
 from olympdev.worker.job import AbstractJob, JobContext, JobStatus
-
-# g++/collect2 need PATH to find `ld`; isolate clears the environment by default.
-COMPILER_ENV = {'PATH': '/usr/bin:/bin'}
 
 _COMPILER_NAME = re.compile(
     r"^(?:g\+\+|gcc|clang\+\+|clang|c\+\+|cc|python3|python)(?:-\d+(?:\.\d+)*)?$"
@@ -34,6 +33,28 @@ _FORBIDDEN_COMPILE_PREFIXES = (
     "-plugin",
     "-iplugindir",
 )
+
+
+_C_COMPILER_NAMES = frozenset({"gcc", "cc"})
+
+
+def _compiler_language(compiler_path: Path) -> Language:
+    """Language of a compiler, for picking its toolchain settings."""
+    stem = compiler_path.name.split("-", 1)[0]
+    return Language.C if stem in _C_COMPILER_NAMES else Language.CPP
+
+
+def _check_flag_allowed(arg: str, allowed_flags: frozenset[str] | None) -> None:
+    """Reject a flag by allowlist when configured, else by the denylist."""
+    if allowed_flags is not None:
+        if arg not in allowed_flags:
+            raise ValueError(f"compile flag is not in the allowlist: {arg}")
+        return
+    if arg.startswith("@") or any(
+        arg == prefix or arg.startswith(prefix)
+        for prefix in _FORBIDDEN_COMPILE_PREFIXES
+    ):
+        raise ValueError(f"compile flag is not allowed: {arg}")
 
 
 def _compiler_dir_allowed(path: Path) -> bool:
@@ -69,6 +90,11 @@ def validate_compile_command(
     if not compiler_path.is_file():
         raise ValueError(f"compiler does not exist: {compiler}")
 
+    toolchain = get_settings().toolchain(_compiler_language(compiler_path))
+    allowed_flags = (
+        None if toolchain.allowed_flags is None else frozenset(toolchain.allowed_flags)
+    )
+
     validated: list[str | int] = [compiler]
     skip_next_as_output = False
     for arg in command[1:]:
@@ -87,15 +113,11 @@ def validate_compile_command(
             continue
         if arg == "":
             raise ValueError("empty compile argument")
-        if arg.startswith("@") or any(
-            arg == prefix or arg.startswith(prefix)
-            for prefix in _FORBIDDEN_COMPILE_PREFIXES
-        ):
-            raise ValueError(f"compile flag is not allowed: {arg}")
         if arg == "-o":
             skip_next_as_output = True
             validated.append(arg)
             continue
+        _check_flag_allowed(arg, allowed_flags)
         validated.append(arg)
     if skip_next_as_output:
         raise ValueError("compile -o is missing an output path")
@@ -124,7 +146,6 @@ COMPILE_JOB_LIMITS = IsolateLimits(
     cg_memory_limit_kb=1024 * 256,
     file_size_limit_kb=1024 * 16,
 )
-PROCESS_LIMIT = 64
 
 
 def _output_binary_name(command: list[str | int]) -> str | None:
@@ -225,10 +246,9 @@ class CompileJob(AbstractJob):
             meta = sandbox.run(
                 args,
                 COMPILE_JOB_LIMITS,
-                processes=PROCESS_LIMIT,
+                COMPILE_PROFILE,
                 stdout_file=compile_stdout_local_path,
                 stderr_file=compile_stderr_local_path,
-                env=COMPILER_ENV,
             )
 
             stdout_digest = storage.upload_file(sandbox.box_path(compile_stdout_local_path))

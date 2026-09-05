@@ -256,3 +256,34 @@ def test_compile_rejects_reserved_source_path(storage: FileStorage, test_assets_
             sources=[(test_assets_path / "hello.cpp", "compile_stdout.txt")],
             command=[_gxx(), "-o", "hello", 0],
         )
+
+
+def test_allowlist_rejects_flags_outside_the_configured_set():
+    """With toolchains.<lang>.allowed_flags set, the denylist is replaced by it."""
+    from olympdev.settings import Settings, using_settings
+    from olympdev.worker.jobs.compile import validate_compile_command
+
+    gxx = shutil.which("g++")
+    if gxx is None:
+        pytest.skip("g++ is not available")
+    strict = Settings.model_validate(
+        {"toolchains": {"cpp": {"allowed_flags": ["-O2"]}}}
+    )
+    with using_settings(strict):
+        validate_compile_command([gxx, "-O2", "-o", "out", 0], 1)
+        with pytest.raises(ValueError, match="not in the allowlist"):
+            validate_compile_command([gxx, "-O2", "-funroll-loops", "-o", "out", 0], 1)
+        # An otherwise harmless include path is not implicitly allowed either.
+        with pytest.raises(ValueError, match="not in the allowlist"):
+            validate_compile_command([gxx, "-I/usr/include", "-o", "out", 0], 1)
+
+
+def test_denylist_still_applies_when_no_allowlist_is_configured():
+    from olympdev.worker.jobs.compile import validate_compile_command
+
+    gxx = shutil.which("g++")
+    if gxx is None:
+        pytest.skip("g++ is not available")
+    validate_compile_command([gxx, "-O2", "-o", "out", 0], 1)
+    with pytest.raises(ValueError, match="not allowed"):
+        validate_compile_command([gxx, "-fplugin=evil.so", "-o", "out", 0], 1)

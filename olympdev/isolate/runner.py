@@ -13,12 +13,8 @@ from pathlib import Path
 from typing import Self
 
 from olympdev.settings import get_settings
-from olympdev.isolate.types import (
-    IsolateDirectoryRules,
-    IsolateLimits,
-    IsolateMeta,
-    IsolateQuota,
-)
+from olympdev.isolate.profiles import RUN_PROFILE, SandboxProfile
+from olympdev.isolate.types import IsolateLimits, IsolateMeta, IsolateQuota
 
 logger = logging.getLogger(__name__)
 
@@ -81,18 +77,14 @@ def _build_run_args(
     limits: IsolateLimits,
     args: list[str],
     *,
+    profile: SandboxProfile = RUN_PROFILE,
     stdin_arg: str | None = None,
     stdout_arg: str | None = None,
     stderr_arg: str | None = None,
-    processes: int | None = None,
-    env: dict[str, str | None] | None = None,
-    full_env: bool = False,
-    dir_rules: IsolateDirectoryRules | None = None,
     meta_path: str,
 ) -> list[str]:
     run_args = ["--cg"]
-    if dir_rules is not None:
-        run_args.extend(dir_rules.to_cli())
+    run_args.extend(profile.dir_rules.to_cli())
     run_args.extend([
         "-t", f"{limits.time_sec():0.3f}",
         "-w", f"{limits.wall_sec():0.3f}",
@@ -102,20 +94,13 @@ def _build_run_args(
     run_args.extend(["--cg-mem", str(limits.cg_memory_kb())])
     if limits.file_size_limit_kb is not None:
         run_args.extend(["-f", str(limits.file_size_limit_kb)])
-    if processes is not None:
-        run_args.append(f"--processes={processes}")
-    if full_env:
-        run_args.append("-e")
-    if env:
-        for key, value in env.items():
-            if not _ENV_KEY.fullmatch(key):
-                raise ValueError(f"invalid environment variable name: {key!r}")
-            if value is None:
-                run_args.append(f"--env={key}")
-            else:
-                if "\n" in value or "\x00" in value:
-                    raise ValueError(f"invalid environment value for {key}")
-                run_args.append(f"--env={key}={value}")
+    run_args.append(f"--processes={profile.processes}")
+    for key, value in profile.env.items():
+        if not _ENV_KEY.fullmatch(key):
+            raise ValueError(f"invalid environment variable name: {key!r}")
+        if "\n" in value or "\x00" in value:
+            raise ValueError(f"invalid environment value for {key}")
+        run_args.append(f"--env={key}={value}")
     if stdin_arg is not None:
         run_args.extend(["-i", stdin_arg])
     if stdout_arg is not None:
@@ -295,23 +280,20 @@ class IsolateSandBox:
         self,
         args: list[str],
         limits: IsolateLimits,
+        profile: SandboxProfile = RUN_PROFILE,
         *,
         stdin_file: str | Path | None = None,
         stdout_file: str | Path | None = None,
         stderr_file: str | Path | None = None,
-        processes: int | None = None,
-        env: dict[str, str | None] | None = None,
-        full_env: bool = False,
-        dir_rules: IsolateDirectoryRules | None = None,
     ) -> IsolateMeta:
-        """Run a command inside the sandbox.
+        """Run a command inside the sandbox under a fixed profile.
 
         Without `stdout_file`, program stdout is discarded (isolate stdout is
         DEVNULL). Without `stderr_file`, program stderr goes to `/dev/null`
         inside the sandbox. Pass `stderr_file` to keep it.
 
-        `full_env` and `dir_rules` are opt-in: they can widen the sandbox
-        (host environment, extra binds). Leave them unset for contest runs.
+        Processes, environment and mounts come from `profile` and cannot be
+        widened per call.
         """
         if self.box_dir is None:
             raise RuntimeError("sandbox is not initialized")
@@ -323,16 +305,16 @@ class IsolateSandBox:
         run_args = _build_run_args(
             limits,
             args,
-            stdin_arg=self.box_arg(
-                stdin_file) if stdin_file is not None else None,
-            stdout_arg=self.box_arg(
-                stdout_file) if stdout_file is not None else None,
-            stderr_arg=self.box_arg(
-                stderr_file) if stderr_file is not None else None,
-            processes=processes,
-            env=env,
-            full_env=full_env,
-            dir_rules=dir_rules,
+            profile=profile,
+            stdin_arg=(
+                self.box_arg(stdin_file) if stdin_file is not None else None
+            ),
+            stdout_arg=(
+                self.box_arg(stdout_file) if stdout_file is not None else None
+            ),
+            stderr_arg=(
+                self.box_arg(stderr_file) if stderr_file is not None else None
+            ),
             meta_path=str(meta_path.resolve()),
         )
         try:
