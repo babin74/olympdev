@@ -69,10 +69,10 @@ class RunLimits(FrozenModel):
     @classmethod
     def from_configuration(cls, configuration: ProblemConfiguration) -> Self:
         return cls(
-            time_limit_ms=configuration.time_limit,
+            time_limit_ms=configuration.time_limit_ms,
             wall_time_ms=configuration.get_wall_limit(),
-            memory_limit_mb=configuration.memory_limit,
-            aspace_limit_kb=configuration.aspace_limit,
+            memory_limit_mb=configuration.memory_limit_mb,
+            aspace_limit_kb=configuration.aspace_limit_kb,
             file_size_limit_kb=configuration.get_file_size_limit(),
         )
 

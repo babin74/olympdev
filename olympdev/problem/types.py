@@ -102,37 +102,52 @@ class ProblemSolution(FrozenModel):
         return []
 
 
-class ProblemConfiguration(FrozenModel):
-    time_limit: int
-    memory_limit: int
-    input_file_name: str
-    output_file_name: str
-    samples: list[ProblemTest]
-    tests: list[ProblemTest]
-    wall_limit: int | None = None
-    aspace_limit: int | None = None
-    file_size_limit: int | None = None
-    use_io_redirect: bool = True
+class ProblemDevSettings(FrozenModel):
+    """Editor conveniences from info.json; never affects testing."""
 
-    solutions: list[ProblemSolution]
-    sources: list[ProblemSource]
+    compile_options_path: str | None = None
+
+
+class ProblemConfiguration(FrozenModel):
+    """A problem's info.json.
+
+    Field names match the file, so info.json loads without a translation
+    layer. Limits carry their unit in the name because they are read by
+    people writing problems, not just by code.
+    """
+
+    time_limit_ms: int
+    memory_limit_mb: int
+    samples: list[ProblemTest] = []
+    tests: list[ProblemTest] = []
+    wall_limit_ms: int | None = None
+    aspace_limit_kb: int | None = None
+    file_size_limit_kb: int | None = None
+
+    solutions: list[ProblemSolution] = []
+    sources: list[ProblemSource] = []
+    dev: ProblemDevSettings = ProblemDevSettings()
 
     @model_validator(mode="after")
     def _check_limits(self) -> Self:
         caps = get_settings().limits
         check_limit_range(
-            "time_limit", self.time_limit, minimum=1, maximum=caps.max_time_limit_ms
+            "time_limit_ms", self.time_limit_ms, minimum=1, maximum=caps.max_time_limit_ms
         )
         check_limit_range(
-            "memory_limit",
-            self.memory_limit,
+            "memory_limit_mb",
+            self.memory_limit_mb,
             minimum=1,
             maximum=caps.max_memory_limit_mb,
         )
         optional = (
-            ("wall_limit", self.wall_limit, caps.max_wall_time_ms),
-            ("aspace_limit", self.aspace_limit, caps.max_aspace_limit_kb),
-            ("file_size_limit", self.file_size_limit, caps.max_file_size_limit_kb),
+            ("wall_limit_ms", self.wall_limit_ms, caps.max_wall_time_ms),
+            ("aspace_limit_kb", self.aspace_limit_kb, caps.max_aspace_limit_kb),
+            (
+                "file_size_limit_kb",
+                self.file_size_limit_kb,
+                caps.max_file_size_limit_kb,
+            ),
         )
         for name, value, maximum in optional:
             if value is not None:
@@ -142,17 +157,63 @@ class ProblemConfiguration(FrozenModel):
             raise ValueError(
                 f"too many tests: {n_tests} (max {caps.max_tests_per_problem})"
             )
+        self._check_solution_tags()
+        self._check_sources()
         return self
 
+    def _check_solution_tags(self) -> None:
+        """One 'main' solution, and no tag used twice."""
+        seen: dict[str, str] = {}
+        for solution in self.solutions:
+            if solution.tag in seen:
+                raise ValueError(
+                    f"duplicate solution tag {solution.tag!r}: "
+                    f"{seen[solution.tag]} and {solution.file}"
+                )
+            seen[solution.tag] = solution.file
+        if self.solutions and "main" not in seen:
+            raise ValueError("a problem with solutions needs one tagged 'main'")
+
+    def _check_sources(self) -> None:
+        seen: dict[ProblemSourceType, str] = {}
+        for source in self.sources:
+            if source.type in seen:
+                raise ValueError(
+                    f"duplicate {source.type.value} source: "
+                    f"{seen[source.type]} and {source.file}"
+                )
+            seen[source.type] = source.file
+
     def get_wall_limit(self) -> int:
-        if self.wall_limit is None:
-            return min(2 * self.time_limit, get_settings().limits.max_wall_time_ms)
-        return self.wall_limit
+        if self.wall_limit_ms is None:
+            return min(2 * self.time_limit_ms, get_settings().limits.max_wall_time_ms)
+        return self.wall_limit_ms
 
     def get_file_size_limit(self) -> int:
-        if self.file_size_limit is None:
+        if self.file_size_limit_kb is None:
             return 16 * 1024
-        return self.file_size_limit
+        return self.file_size_limit_kb
+
+    def source(self, source_type: ProblemSourceType) -> ProblemSource | None:
+        for source in self.sources:
+            if source.type is source_type:
+                return source
+        return None
+
+    def solution(self, tag: str) -> ProblemSolution | None:
+        for solution in self.solutions:
+            if solution.tag == tag:
+                return solution
+        return None
+
+    def main_solution(self) -> ProblemSolution | None:
+        return self.solution("main")
+
+    def needs_model_solution(self) -> bool:
+        """True when some test has no answer file, so one must be generated."""
+        return any(
+            test.output_file is None for test in (*self.samples, *self.tests)
+        )
 
 
 def resolve_problem_file(problem_dir: Path, relative: str) -> Path:

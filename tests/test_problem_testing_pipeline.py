@@ -32,8 +32,8 @@ def _configuration(
     problem_dir: Path,
     *,
     expected: bytes = b"Hello, output world!\n",
-    aspace_limit: int | None = None,
-    file_size_limit: int | None = 2048,
+    aspace_limit_kb: int | None = None,
+    file_size_limit_kb: int | None = 2048,
     extra_tests: list[ProblemTest] | None = None,
 ) -> ProblemConfiguration:
     sample = problem_dir / "sample.in"
@@ -42,16 +42,12 @@ def _configuration(
     sample_out.write_bytes(expected)
     tests = extra_tests or []
     return ProblemConfiguration(
-        time_limit=1000,
-        memory_limit=64,
-        aspace_limit=aspace_limit,
-        file_size_limit=file_size_limit,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
+        time_limit_ms=1000,
+        memory_limit_mb=64,
+        aspace_limit_kb=aspace_limit_kb,
+        file_size_limit_kb=file_size_limit_kb,
         samples=[ProblemTest(input_file="sample.in", output_file="sample.out")],
         tests=tests,
-        solutions=[],
-        sources=[],
     )
 
 
@@ -139,7 +135,7 @@ def test_make_input_digest_stores_aspace_limit(
     test_assets_path: Path,
     tmp_path: Path,
 ):
-    configuration = _configuration(tmp_path, aspace_limit=4096)
+    configuration = _configuration(tmp_path, aspace_limit_kb=4096)
     input_digest = _make_digest(storage, test_assets_path, configuration, tmp_path)
 
     arguments = storage.download_dictionary(input_digest)
@@ -161,7 +157,7 @@ def test_make_input_digest_aspace_none_and_file_size_default(
     test_assets_path: Path,
     tmp_path: Path,
 ):
-    configuration = _configuration(tmp_path, aspace_limit=None, file_size_limit=None)
+    configuration = _configuration(tmp_path, aspace_limit_kb=None, file_size_limit_kb=None)
     input_digest = _make_digest(storage, test_assets_path, configuration, tmp_path)
 
     arguments = storage.download_dictionary(input_digest)
@@ -174,7 +170,7 @@ def test_parse_arguments_roundtrip(
     test_assets_path: Path,
     tmp_path: Path,
 ):
-    configuration = _configuration(tmp_path, aspace_limit=8192, file_size_limit=1024)
+    configuration = _configuration(tmp_path, aspace_limit_kb=8192, file_size_limit_kb=1024)
     input_digest = _make_digest(storage, test_assets_path, configuration, tmp_path)
     pipeline = ProblemTestingPipeline()
     context = PipelineContext(input_digest=input_digest, storage=storage)
@@ -237,7 +233,7 @@ def test_run_job_gets_aspace_and_file_size_limits(
     test_assets_path: Path,
     tmp_path: Path,
 ):
-    configuration = _configuration(tmp_path, aspace_limit=2048, file_size_limit=512)
+    configuration = _configuration(tmp_path, aspace_limit_kb=2048, file_size_limit_kb=512)
     input_digest = _make_digest(storage, test_assets_path, configuration, tmp_path)
     pipeline = ProblemTestingPipeline()
     context = PipelineContext(
@@ -369,15 +365,11 @@ def test_problem_testing_missing_answer_requires_model(
 ):
     (tmp_path / "sample.in").write_bytes(b"")
     configuration = ProblemConfiguration(
-        time_limit=1000,
-        memory_limit=64,
-        file_size_limit=2048,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
+        time_limit_ms=1000,
+        memory_limit_mb=64,
+        file_size_limit_kb=2048,
         samples=[ProblemTest(input_file="sample.in")],
         tests=[],
-        solutions=[],
-        sources=[],
     )
     with pytest.raises(ValueError, match="model solution is required"):
         _make_digest(storage, test_assets_path, configuration, tmp_path)
@@ -395,14 +387,10 @@ def test_store_test_rejects_path_escape(
     secret = tmp_path.parent / "secret.txt"
     secret.write_text("worker-secret")
     configuration = ProblemConfiguration(
-        time_limit=1000,
-        memory_limit=64,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
+        time_limit_ms=1000,
+        memory_limit_mb=64,
         samples=[ProblemTest(input_file="../secret.txt")],
         tests=[],
-        solutions=[],
-        sources=[],
     )
     with pytest.raises(ValueError, match=r"\.\.|relative"):
         ProblemTestingPipeline.make_input_digest(
@@ -440,14 +428,10 @@ def test_store_test_rejects_symlink(
     outside.write_text("host-secret")
     (tmp_path / "sample.in").symlink_to(outside)
     configuration = ProblemConfiguration(
-        time_limit=1000,
-        memory_limit=64,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
+        time_limit_ms=1000,
+        memory_limit_mb=64,
         samples=[ProblemTest(input_file="sample.in")],
         tests=[],
-        solutions=[],
-        sources=[],
     )
     with pytest.raises(ValueError, match="symlink"):
         ProblemTestingPipeline.make_input_digest(
@@ -517,14 +501,10 @@ def test_problem_testing_arguments_requires_generator_for_gen_cmd():
 def test_problem_configuration_rejects_zero_memory():
     with pytest.raises(ValidationError, match="memory_limit"):
         ProblemConfiguration(
-            time_limit=1000,
-            memory_limit=0,
-            input_file_name="input.txt",
-            output_file_name="output.txt",
+            time_limit_ms=1000,
+            memory_limit_mb=0,
             samples=[],
             tests=[],
-            solutions=[],
-            sources=[],
         )
 
 

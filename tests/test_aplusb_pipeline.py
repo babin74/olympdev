@@ -4,14 +4,8 @@ from pathlib import Path
 import pytest
 
 from olympdev.isolate import IsolateFactory
-from olympdev.problem.types import (
-    ProblemConfiguration,
-    ProblemSolution,
-    ProblemSource,
-    ProblemSourceType,
-    ProblemTest,
-)
-from olympdev.resources import asset_file
+from olympdev.problem.build import build_problem_testing_input
+from olympdev.problem.package import ProblemPackage
 from olympdev.storage.filestorage import FileStorage
 from olympdev.worker.job import JobStatus
 from olympdev.worker.jobs.simple_run import SimpleRunJob
@@ -23,10 +17,7 @@ from olympdev.worker.pipeline import (
     ScheduledJob,
     run_pipeline,
 )
-from olympdev.worker.pipelines.problem_testing import (
-    CompileSpec,
-    ProblemTestingPipeline,
-)
+from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
 from olympdev.worker.roles import ProgramRole
 from olympdev.worker.verdict import Verdict
 
@@ -49,85 +40,17 @@ _COMPILE_IDS = (
 )
 
 
-def _aplusb_configuration() -> ProblemConfiguration:
-    return ProblemConfiguration(
-        time_limit=1000,
-        memory_limit=512,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
-        samples=[ProblemTest(input_file=path) for path in _STATIC_SAMPLES],
-        tests=[
-            ProblemTest(input_file=_STATIC_TESTS[0]),
-            *[
-                ProblemTest(gen_cmd=cmd, name=name)
-                for cmd, name in _GENERATED_TESTS
-            ],
-        ],
-        solutions=[
-            ProblemSolution(file="solutions/sol-ac.cpp", tag="main"),
-            ProblemSolution(file="solutions/sol-wa.cpp", tag="WA"),
-            ProblemSolution(file="solutions/sol-tl.cpp", tag="TL"),
-        ],
-        sources=[
-            ProblemSource(file="source/gen.cpp", type=ProblemSourceType.GEN),
-            ProblemSource(file="source/ncmp.cpp", type=ProblemSourceType.CHECK),
-            ProblemSource(file="source/valid.cpp", type=ProblemSourceType.VALID),
-        ],
-    )
-
-
-def _gxx() -> str:
-    gxx = shutil.which("g++")
-    if gxx is None:
-        pytest.skip("g++ is not available")
-    return gxx
-
-
 def _aplusb_digest(
     storage: FileStorage,
     aplusb_dir: Path,
     *,
-    source: Path,
+    source: Path | str | bytes | None = None,
 ) -> str:
-    gxx = _gxx()
-    with asset_file("testlib.h") as testlib:
-        return ProblemTestingPipeline.make_input_digest(
-            storage,
-            programs={
-                ProgramRole.SOLUTION: CompileSpec(
-                    sources=[(source, "main.cpp")],
-                    command=[gxx, "-O2", "-o", "solution", 0],
-                ),
-                ProgramRole.CHECKER: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[gxx, "-O2", "-o", "checker", 0],
-                ),
-                ProgramRole.MODEL: CompileSpec(
-                    sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
-                    command=[gxx, "-O2", "-o", "model", 0],
-                ),
-                ProgramRole.GENERATOR: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[gxx, "-O2", "-o", "gen", 0],
-                ),
-                ProgramRole.VALIDATOR: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[gxx, "-O2", "-o", "valid", 0],
-                ),
-            },
-            configuration=_aplusb_configuration(),
-            problem_dir=aplusb_dir,
-            problem_name="aplusb",
-        )
+    if shutil.which("g++") is None:
+        pytest.skip("g++ is not available")
+    return build_problem_testing_input(
+        storage, ProblemPackage.load(aplusb_dir), solution=source
+    )
 
 
 def _run(storage: FileStorage, isolate_factory: IsolateFactory, input_digest: str):
@@ -170,7 +93,7 @@ def test_aplusb_main_solution_ok_without_output_files(
     aplusb_dir: Path,
 ):
     input_digest = _aplusb_digest(
-        storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-ac.cpp"
+        storage, aplusb_dir, source="solutions/sol-ac.cpp"
     )
     arguments = storage.download_dictionary(input_digest)
     assert set(arguments["compiles"]) == {
@@ -212,7 +135,7 @@ def test_aplusb_wa_solution_is_wrong_against_generated_answers(
     aplusb_dir: Path,
 ):
     input_digest = _aplusb_digest(
-        storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-wa.cpp"
+        storage, aplusb_dir, source="solutions/sol-wa.cpp"
     )
     pipeline = _run(storage, isolate_factory, input_digest)
 
@@ -230,7 +153,7 @@ def test_aplusb_validates_static_input_before_run_and_model(
     aplusb_dir: Path,
 ):
     input_digest = _aplusb_digest(
-        storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-ac.cpp"
+        storage, aplusb_dir, source="solutions/sol-ac.cpp"
     )
     pipeline = ProblemTestingPipeline("aplusb")
     context = _context(storage, isolate_factory, input_digest)
@@ -285,7 +208,7 @@ def test_aplusb_generated_test_runs_gen_then_valid_then_run(
     aplusb_dir: Path,
 ):
     input_digest = _aplusb_digest(
-        storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-ac.cpp"
+        storage, aplusb_dir, source="solutions/sol-ac.cpp"
     )
     pipeline = ProblemTestingPipeline("aplusb")
     context = _context(storage, isolate_factory, input_digest)
@@ -330,7 +253,7 @@ def test_aplusb_starts_next_test_while_model_generates_answer(
     aplusb_dir: Path,
 ):
     input_digest = _aplusb_digest(
-        storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-ac.cpp"
+        storage, aplusb_dir, source="solutions/sol-ac.cpp"
     )
     pipeline = ProblemTestingPipeline("aplusb")
     context = _context(storage, isolate_factory, input_digest)

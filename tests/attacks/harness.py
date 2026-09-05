@@ -19,24 +19,14 @@ from pathlib import Path
 import pytest
 
 from olympdev.isolate import IsolateFactory, IsolateLimits, IsolateMeta
-from olympdev.problem.types import (
-    ProblemConfiguration,
-    ProblemSolution,
-    ProblemSource,
-    ProblemSourceType,
-    ProblemTest,
-)
-from olympdev.resources import asset_file
+from olympdev.problem.build import build_problem_testing_input
+from olympdev.problem.package import ProblemPackage
 from olympdev.storage.filestorage import FileStorage
 from olympdev.worker.job import JobContext, JobStatus
 from olympdev.worker.jobs.compile import COMPILE_JOB_LIMITS, CompileJob, CompileJobResult
 from olympdev.worker.jobs.simple_run import SimpleRunJob, SimpleRunJobResult
 from olympdev.worker.pipeline import PipelineContext, PipelineStatus, run_pipeline
-from olympdev.worker.pipelines.problem_testing import (
-    CompileSpec,
-    ProblemTestingPipeline,
-)
-from olympdev.worker.roles import ProgramRole
+from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
 from olympdev.worker.verdict import Verdict
 
 PAYLOADS = Path(__file__).resolve().parent / "payloads"
@@ -109,33 +99,6 @@ def payload_bytes(name: str) -> bytes:
     return data
 
 
-def aplusb_configuration() -> ProblemConfiguration:
-    return ProblemConfiguration(
-        time_limit=APLUSB_TIME_MS,
-        memory_limit=APLUSB_MEMORY_MB,
-        input_file_name="input.txt",
-        output_file_name="output.txt",
-        samples=[ProblemTest(input_file=path) for path in _STATIC_SAMPLES],
-        tests=[
-            ProblemTest(input_file=_STATIC_TESTS[0]),
-            *[
-                ProblemTest(gen_cmd=cmd, name=name)
-                for cmd, name in _GENERATED_TESTS
-            ],
-        ],
-        solutions=[
-            ProblemSolution(file="solutions/sol-ac.cpp", tag="main"),
-            ProblemSolution(file="solutions/sol-wa.cpp", tag="WA"),
-            ProblemSolution(file="solutions/sol-tl.cpp", tag="TL"),
-        ],
-        sources=[
-            ProblemSource(file="source/gen.cpp", type=ProblemSourceType.GEN),
-            ProblemSource(file="source/ncmp.cpp", type=ProblemSourceType.CHECK),
-            ProblemSource(file="source/valid.cpp", type=ProblemSourceType.VALID),
-        ],
-    )
-
-
 def gxx() -> str:
     path = shutil.which("g++")
     if path is None:
@@ -150,45 +113,11 @@ def submit_aplusb_cpp(
     *,
     sandbox_name: str = "main.cpp",
 ) -> str:
-    compiler = gxx()
-    with asset_file("testlib.h") as testlib:
-        return ProblemTestingPipeline.make_input_digest(
-            storage,
-            programs={
-                ProgramRole.SOLUTION: CompileSpec(
-                    sources=[(source, sandbox_name)],
-                    command=[compiler, "-O2", "-o", "solution", 0],
-                ),
-                ProgramRole.CHECKER: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[compiler, "-O2", "-o", "checker", 0],
-                ),
-                ProgramRole.MODEL: CompileSpec(
-                    sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
-                    command=[compiler, "-O2", "-o", "model", 0],
-                ),
-                ProgramRole.GENERATOR: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[compiler, "-O2", "-o", "gen", 0],
-                ),
-                ProgramRole.VALIDATOR: CompileSpec(
-                    sources=[
-                        (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
-                        (testlib, "testlib.h"),
-                    ],
-                    command=[compiler, "-O2", "-o", "valid", 0],
-                ),
-            },
-            configuration=aplusb_configuration(),
-            problem_dir=aplusb_dir,
-            problem_name="aplusb",
-        )
+    """Submit a payload against the real aplusb problem, as a participant would."""
+    gxx()
+    return build_problem_testing_input(
+        storage, ProblemPackage.load(aplusb_dir), solution=source
+    )
 
 
 class SubmissionOutcome:
