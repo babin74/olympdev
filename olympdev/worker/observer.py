@@ -34,4 +34,27 @@ class NullObserver:
         return
 
 
+class TextObserver:
+    """One line per job, for the CLI."""
+
+    def __init__(self, write=print, *, show_digests: bool = False):
+        self._write = write
+        self._show_digests = show_digests
+
+    def on_job_issued(self, job: "AbstractJob", input_digest: str) -> None:
+        suffix = f"  {input_digest[:12]}" if self._show_digests else ""
+        self._write(f"  -> {job.job_id}{suffix}")
+
+    def on_job_finished(self, job: "AbstractJob") -> None:
+        status = job.get_status().value
+        reason = job.get_failure_reason()
+        detail = f": {reason}" if reason else ""
+        self._write(f"  {status:<9} {job.job_id}{detail}")
+
+    def on_pipeline_finished(self, pipeline: "AbstractPipeline") -> None:
+        reason = pipeline.get_failure_reason()
+        detail = f": {reason}" if reason else ""
+        self._write(f"{pipeline.pipeline_id}: {pipeline.get_status().value}{detail}")
+
+
 NULL_OBSERVER = NullObserver()
