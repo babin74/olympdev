@@ -1,99 +1,199 @@
 # Olympdev
 
-Инструментарий для олимпиадных задач: песочница, контент-адресуемое хранилище и пайплайн проверки решений.
+Инструментарий для олимпиадных задач: песочница, контент-адресуемое хранилище и
+пайплайн проверки решений.
 
-Пакет на ранней стадии (0.0.1). Основной интерфейс — Python API; CLI пока умеет только генерировать compilation database для IDE.
+Пакет на ранней стадии (0.0.1). Основной интерфейс — Python API и CLI
+`olympdev`.
 
-## Возможности
+## Быстрый старт
 
-### Песочница (isolate)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[notebook]"     # без extra — только ядро, без HTML-видов
 
-Обёртка над [isolate](https://github.com/ioi/isolate): создание box, запуск с лимитами, разбор meta-файла.
+olympdev compare example-contest         # все решения задачи, матрица тест × решение
+olympdev run example-contest --solution WA
+```
 
-- Лимиты: CPU time, wall time, extra kill, память процесса и cgroup, размер файлов.
-- Дисковая квота box (blocks/inodes), если ФС её поддерживает.
-- Правила монтирования каталогов (`--dir`), cgroup-режим.
-- Пул слотов (`IsolateFactory`, 1–999), блокировки между процессами и потоками.
-- Команда isolate задаётся переменной `OLYMPDEV_ISOLATE_CMD` (по умолчанию `isolate`).
+```
+aplusb
+test                 sol-ac.cpp [OK]  sol-wa.cpp [WA]  sol-tl.cpp [TL]
+-------------------  ---------------  ---------------  ---------------
+tests/sample-01.txt  OK 1.0 ms        WA 1.0 ms        OK 1.0 ms
+tests/manual-01.txt  OK 1.0 ms        WA 1.0 ms        TL 2101 ms
+wall                 3075 ms          328 ms           2452 ms
+```
 
-Статусы isolate отображаются в вердикты: `OK`, `WA`, `TL`, `ML`, `RE`, `CE`, `FL`, `PT`, `CF`.
+Из Python — то же самое:
+
+```python
+from olympdev.problem.build import build_problem_testing_input
+from olympdev.problem.package import load_target
+from olympdev.worker.pipeline import PipelineContext, run_pipeline
+from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+
+package = load_target("example-contest").problem("aplusb")
+digest = build_problem_testing_input(storage, package, solution=package.solution("main"))
+
+pipeline = ProblemTestingPipeline("aplusb")
+run_pipeline(pipeline, PipelineContext(
+    input_digest=digest, storage=storage, isolate_factory=isolate_factory,
+))
+pipeline.get_result(storage).verdict
+```
+
+Набор ролей (решение, эталон, чекер, генератор, валидатор) выводится из
+`info.json`: чекер/генератор/валидатор берутся из `sources`, а эталонное решение
+добавляется тогда и только тогда, когда у какого-то теста нет файла с ответом.
+Команды компиляции собираются из настроек тулчейна, `testlib.h` подставляется
+автоматически.
+
+## Конфигурация
+
+Настройки хоста читаются из TOML по первому совпадению:
+
+1. `$OLYMPDEV_CONFIG`
+2. `./olympdev.toml`
+3. `~/.config/olympdev/config.toml`
+4. `/etc/olympdev/config.toml`
+5. встроенные значения по умолчанию
+
+Все ключи необязательны. Справочный файл со всеми значениями —
+[`olympdev.example.toml`](olympdev.example.toml); `olympdev config` печатает
+действующие настройки и файл, из которого они взяты.
+
+Разделы: `limits` (потолки лимитов), `isolate` (команда, каталог блокировок,
+число box'ов, квоты), `storage` (`root`, опциональный `remote_root`),
+`toolchains.cpp` / `toolchains.c` (компилятор, флаги, опциональный allowlist
+флагов).
+
+> Авторитетны настройки того хоста, который валидирует. Задача, собранная там,
+> где потолки шире, будет отвергнута воркером с более узкими. Держите `limits`
+> одинаковыми в пределах инсталляции — либо считайте воркер нижней границей.
+
+## Граница доверия
+
+| Кто | Что контролирует |
+|-----|------------------|
+| Участник | только байты исходника решения |
+| Автор задачи | лимиты в пределах `limits`, флаги компиляции в пределах allow/denylist, argv генератора, файлы тестов внутри каталога задачи |
+| Сервер | команду isolate, профили песочницы, монтирования, потолки лимитов, квоты, число box'ов |
+
+Песочница управляется тремя фиксированными профилями (`COMPILE`, `RUN`,
+`TOOL`): число процессов, окружение и монтирования заданы в них и не могут быть
+расширены вызовом. Окружение хоста программе недоступно — `isolate -e` не
+эмитится никогда. Разбор грамматики `--dir` намеренно приватный
+(`olympdev/isolate/_dir_rules.py`).
+
+Пути к тестам проверяются: только относительно каталога задачи, без `..`, без
+symlink, с ограничением размера.
+
+## Устройство
+
+### Песочница
+
+Обёртка над [isolate](https://github.com/ioi/isolate): создание box, запуск с
+лимитами, разбор meta-файла. Лимиты: CPU time, wall time, extra kill, память
+процесса и cgroup, размер файлов; дисковая квота box'а, если ФС её поддерживает.
+Пул слотов (`IsolateFactory`) с блокировками между процессами и потоками.
+
+Статусы isolate отображаются в вердикты: `OK`, `WA`, `TL`, `ML`, `RE`, `CE`,
+`FL`, `PT`, `CF`.
 
 ### Хранилище
 
-Контент-адресуемое хранилище по SHA-256: файлы, байты и JSON-словари. Реализация на диске — `FileStorage`. Входы и выходы job/pipeline — digest'ы, а не пути на хосте.
+Контент-адресуемое хранилище по SHA-256. Записи атомарны (временный файл плюс
+`os.replace`), блобы шардируются по префиксу digest'а. `CachingStorage(local,
+remote)` — локальный кеш перед общим хранилищем: чего нет локально, подтягивается
+из общего и остаётся рядом. Входы и выходы job/pipeline — digest'ы, а не пути на
+хосте, поэтому воркеру достаточно digest'ов.
 
-### Job и pipeline
+### Роли, job и pipeline
 
-Проверка собирается из атомарных job. Каждый job знает свой `job_type`, кладёт вход в storage и возвращает digest результата.
+Пять ролей описаны один раз в [`olympdev/worker/roles.py`](olympdev/worker/roles.py):
+типы job'ов, политики кеша, вердикт при ошибке компиляции, имя бинаря. Классы
+job'ов генерируются из этой таблицы, а пайплайны ходят по ней циклом. Новая роль —
+одна запись в таблице.
 
 | Job | Назначение |
 |-----|------------|
-| `CompileJob` и роли (`Solution`, `Model`, `Checker`, `Generator`, `Validator`) | Компиляция C/C++ в sandbox (g++/gcc/clang; опасные флаги вроде `-fplugin` запрещены) |
-| `SimpleRunJob` / `SolutionRunJob` / `ModelSolutionRunJob` | Запуск бинарника на одном входе с лимитами задачи |
+| `CompileJob` и роли | Компиляция C/C++ в sandbox (опасные флаги запрещены) |
+| `SimpleRunJob` / `SolutionRunJob` / `ModelSolutionRunJob` | Запуск бинарника на одном входе |
 | `ToolRunJob` / `CheckerJob` / `GeneratorJob` / `ValidatorJob` | Генератор, валидатор, чекер в стиле testlib |
 
-`JobExecutor` умеет кешировать исходы по `(input_digest, policy)`. Сейчас есть `NullCacheStorage` и `MemoryCacheStorage`.
+Пайплайны не вызывают isolate: они только выдают готовые к запуску job'ы. Весь
+прогресс лежит в таблице шагов, поэтому `save_state()` / `restore()` переносят
+незавершённый прогон между процессами, не перезапуская уже сделанное.
 
-Пайплайны не вызывают isolate сами: они только выдают готовые к запуску job. Последовательный драйвер — `run_pipeline`; статус `WAITING` рассчитан на будущий параллельный раннер.
+Драйверы: `run_pipeline` (последовательный) и `run_pipeline_parallel` (пул
+потоков, по box'у на job). Оба принимают `PipelineObserver` — наблюдать за
+прогоном, не копируя цикл драйвера.
 
-### Пайплайн проверки задачи
+### Frontend
 
-`ProblemTestingPipeline` прогоняет решение по всем тестам задачи:
+Три слоя, форматирование ровно в одном месте:
 
-1. Компиляция решения, чекера и при необходимости эталона, генератора, валидатора.
-2. Для каждого теста (`ProblemTestPipeline`):
-   - взять готовый вход **или** сгенерировать его (`gen_cmd`);
-   - прогнать валидатор, если он задан;
-   - запустить решение;
-   - взять эталонный ответ из файла **или** с эталонного решения;
-   - сравнить чекером (коды выхода testlib: 0 → OK, 1/2 → WA, 7 → PT, иначе CF).
-3. Свести вердикты тестов в общий результат.
+- [`frontend/view.py`](olympdev/frontend/view.py) — view-модели без HTML;
+- [`frontend/text.py`](olympdev/frontend/text.py) — терминальные таблицы;
+- [`frontend/html/`](olympdev/frontend/html/) — Jinja-шаблоны с общим `_base.css`.
 
-Ошибки компиляции решения дают `CE`, сбой чекера/генератора/валидатора — `CF`, сбой эталона — `FL`.
+Флаг `--html PATH` у любой команды сохраняет ту же view-модель через другой
+рендерер.
 
-### Формат контеста
+### Ноутбук
 
-Пример лежит в `example-contest/` (задача A+B).
+```python
+from olympdev.notebook import Workbench
 
-`olympdev.json` перечисляет задачи:
+wb = Workbench.open("example-contest", jobs=4)
+p = wb.problem("aplusb")
+
+p.run("main")               # PipelineRunView, рисует себя сам
+p.run("TL", trace=True)     # карточки job'ов по мере выполнения
+p.compare()                 # матрица тест × решение, общий кеш между решениями
+```
+
+`Workbench` владеет хранилищем, пулом песочниц, executor'ом и кешем. Пример —
+[`notebooks/aplusb.ipynb`](notebooks/aplusb.ipynb).
+
+### CLI
+
+| Команда | Что делает |
+|---|---|
+| `olympdev run <target> [--solution TAG] [--jobs N]` | прогон задачи или контеста |
+| `olympdev compare <target> [--solutions ...]` | матрица тест × решение |
+| `olympdev compile-commands <target>` | compilation database для clangd/IDE |
+| `olympdev show <digest>` | содержимое блоба из хранилища |
+| `olympdev config` | действующие настройки и их источник |
+
+Общие флаги: `--config PATH`, `--html PATH`, `--jobs N`, `--problem NAME`.
+
+## Формат контеста
+
+Пример — [`example-contest/`](example-contest/) (задача A+B). `olympdev.json`
+перечисляет задачи:
 
 ```json
 { "problems": ["aplusb"] }
 ```
 
-У задачи — `info.json`: лимиты, решения (`main` / `wa` / `tl` / …), исходники (`gen`, `check`, `valid`), сэмплы и тесты. Тест — либо файл (`input_file`), либо генерация (`gen_cmd` + `name`). Пути к тестам проверяются: только относительно каталога задачи, без `..` и symlink, с ограничением размера.
+У задачи — `info.json`: `time_limit_ms`, `memory_limit_mb`, решения
+(`main` / `WA` / `TL` / …), исходники (`gen`, `check`, `valid`), сэмплы и тесты.
+Тест — либо файл (`input_file`), либо генерация (`gen_cmd` + `name`). Тег `main`
+обязателен, если решения перечислены; теги и типы исходников не должны
+повторяться.
 
 В пакет входят `testlib.h` и `olymp.sty`.
-
-### CLI
-
-Генерация `compile_commands.json` для clangd/IDE (флаги `-O2`, include на `testlib.h` и `source/`):
-
-```bash
-python -m olympdev.frontend.cli example-contest/olympdev.json
-# или для одной задачи:
-python -m olympdev.frontend.cli example-contest/aplusb/info.json
-```
-
-Путь к базе компиляции задаётся в `info.json` как `dev.compile_options_path`.
-
-### HTML
-
-Jinja2-карточка job (статус, описание, метки, digest) — для отладки и будущих отчётов, не полноценный веб-интерфейс.
 
 ## Требования
 
 - Python ≥ 3.12
 - [isolate](https://github.com/ioi/isolate) на хосте
-- компилятор C/C++ (`g++` / `clang++`) для проверки и тестов
+- компилятор C/C++ (`g++` / `clang++`)
 
-Зависимости пакета: Pydantic 2 и Jinja2.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
+Зависимости ядра: Pydantic 2. Extra `notebook`: Jinja2 и IPython.
 
 ## Тесты
 
@@ -103,22 +203,13 @@ pytest tests -m "not slow"   # без isolate
 pytest tests                 # включая sandbox и example-contest/aplusb
 ```
 
-Маркер `slow` — тесты, которые реально компилируют и гоняют программы в isolate. В `tests/attacks/` — прогоны вредоносных payload (macro bomb, include хоста, TL/ML) через тот же пайплайн, что и обычное решение.
-
-## Лимиты по умолчанию
-
-| Параметр | Максимум |
-|----------|----------|
-| CPU time | 300 с |
-| Wall time | 600 с |
-| Память | 4096 МиБ |
-| Размер файла | 256 МиБ |
-| Тестов на задачу | 1024 |
-| Размер файла теста | 32 МиБ |
+Маркер `slow` — тесты, которые реально компилируют и гоняют программы в isolate.
+В `tests/attacks/` — прогоны вредоносных payload (macro bomb, include хоста,
+TL/ML) через тот же пайплайн, что и обычное решение.
 
 ## Пока нет
 
-- CLI «прогнать контест / задачу»
 - Генерация условий (в пакете есть `olymp.sty`, пайплайна нет)
-- Постоянный кеш на диске и параллельный раннер
+- Постоянный кеш job'ов на диске
+- Удалённый бэкенд хранилища (интерфейс готов, реализации HTTP/S3 нет)
 - Веб-сервер и UI
