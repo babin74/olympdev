@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -113,3 +114,43 @@ def test_caps_are_enforced_at_validation_time():
             IsolateLimits(time_limit_ms=1000, memory_limit_mb=64)
     # Outside the override the same limits validate fine.
     IsolateLimits(time_limit_ms=1000, memory_limit_mb=64)
+
+
+def test_compile_limits_come_from_settings():
+    from olympdev.worker.jobs.compile import compile_job_limits
+
+    custom = Settings.model_validate({"compile": {"time_limit_ms": 4321}})
+    with using_settings(custom):
+        assert compile_job_limits().time_limit_ms == 4321
+    assert compile_job_limits().time_limit_ms == 10_000
+
+
+def test_a_tight_cap_does_not_break_importing_the_package(tmp_path, monkeypatch):
+    """Caps are checked when limits are built, not when a module is imported.
+
+    A module-level IsolateLimits constant made a low max_memory_limit_mb blow
+    up every import, so even `olympdev config` could not run.
+    """
+    import subprocess
+    import sys
+
+    config = _write(
+        tmp_path / "olympdev.toml", "[limits]\nmax_memory_limit_mb = 8\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import olympdev.worker.jobs; print('imported')"],
+        env={**os.environ, CONFIG_ENV_VAR: str(config)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "imported" in result.stdout
+
+
+def test_a_tight_cap_is_reported_when_the_compile_limits_are_built():
+    from olympdev.worker.jobs.compile import compile_job_limits
+
+    tightened = Settings.model_validate({"limits": {"max_memory_limit_mb": 8}})
+    with using_settings(tightened):
+        with pytest.raises(Exception, match="memory_limit_mb"):
+            compile_job_limits()

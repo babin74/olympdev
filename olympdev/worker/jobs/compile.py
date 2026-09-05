@@ -141,13 +141,21 @@ class CompileJobArguments(FrozenModel):
         return result
 
 
-COMPILE_JOB_LIMITS = IsolateLimits(
-    time_limit_ms=10000,
-    wall_time_ms=10000,
-    memory_limit_mb=1024,
-    cg_memory_limit_kb=1024 * 256,
-    file_size_limit_kb=1024 * 16,
-)
+def compile_job_limits() -> IsolateLimits:
+    """Compile limits from settings.
+
+    Built on demand rather than at import: these are validated against the
+    host's caps, and a module-level constant would make a tight cap break
+    every import of the package instead of the compile that violates it.
+    """
+    compile_settings = get_settings().compile
+    return IsolateLimits(
+        time_limit_ms=compile_settings.time_limit_ms,
+        wall_time_ms=compile_settings.wall_time_ms,
+        memory_limit_mb=compile_settings.memory_limit_mb,
+        cg_memory_limit_kb=compile_settings.cg_memory_limit_kb,
+        file_size_limit_kb=compile_settings.file_size_limit_kb,
+    )
 
 
 def _output_binary_name(command: list[str | int]) -> str | None:
@@ -249,7 +257,7 @@ class CompileJob(AbstractJob):
             args = arguments.to_cli_arguments(box_args)
             meta = sandbox.run(
                 args,
-                COMPILE_JOB_LIMITS,
+                compile_job_limits(),
                 COMPILE_PROFILE,
                 stdout_file=compile_stdout_local_path,
                 stderr_file=compile_stderr_local_path,

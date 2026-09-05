@@ -131,6 +131,22 @@ class IsolateSettings(_Frozen):
         return Path(tempfile.gettempdir()) / "olympdev-isolate-locks"
 
 
+class CompileLimits(_Frozen):
+    """Limits for the compile job itself.
+
+    These belong to the host, not to a problem: a participant never chooses
+    them. They are still checked against LimitCaps, so a host that caps memory
+    below what its compiler needs is a configuration error - and one reported
+    when compiling, not at import time.
+    """
+
+    time_limit_ms: int = 10_000
+    wall_time_ms: int = 10_000
+    memory_limit_mb: int = 1024
+    cg_memory_limit_kb: int = 1024 * 256
+    file_size_limit_kb: int = 1024 * 16
+
+
 class StorageSettings(_Frozen):
     """Where content-addressed blobs live on this host."""
 
@@ -177,6 +193,7 @@ DEFAULT_TOOLCHAINS: dict[Language, ToolchainSettings] = {
 
 class Settings(_Frozen):
     limits: LimitCaps = LimitCaps()
+    compile: CompileLimits = CompileLimits()
     isolate: IsolateSettings = IsolateSettings()
     storage: StorageSettings = StorageSettings()
     toolchains: dict[Language, ToolchainSettings] = DEFAULT_TOOLCHAINS

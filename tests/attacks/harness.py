@@ -23,10 +23,11 @@ from olympdev.problem.build import build_problem_testing_input
 from olympdev.problem.package import ProblemPackage
 from olympdev.storage.filestorage import FileStorage
 from olympdev.worker.job import JobContext, JobStatus
-from olympdev.worker.jobs.compile import COMPILE_JOB_LIMITS, CompileJob, CompileJobResult
+from olympdev.worker.jobs.compile import CompileJob, CompileJobResult, compile_job_limits
 from olympdev.worker.jobs.simple_run import SimpleRunJob, SimpleRunJobResult
 from olympdev.worker.pipeline import PipelineContext, PipelineStatus, run_pipeline
 from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.roles import ProgramRole
 from olympdev.worker.verdict import Verdict
 
 PAYLOADS = Path(__file__).resolve().parent / "payloads"
@@ -42,9 +43,10 @@ APLUSB_MEMORY_MB = 512
 APLUSB_CG_MEM_KB = APLUSB_MEMORY_MB * 256
 APLUSB_FILE_SIZE_KB = 16 * 1024
 
-COMPILE_TIME_CAP_SEC = COMPILE_JOB_LIMITS.time_sec() + 2.0
-COMPILE_WALL_CAP_SEC = COMPILE_JOB_LIMITS.wall_sec() + 2.0
-COMPILE_CG_CAP_KB = COMPILE_JOB_LIMITS.cg_memory_kb() + 64 * 1024
+_COMPILE_LIMITS = compile_job_limits()
+COMPILE_TIME_CAP_SEC = _COMPILE_LIMITS.time_sec() + 2.0
+COMPILE_WALL_CAP_SEC = _COMPILE_LIMITS.wall_sec() + 2.0
+COMPILE_CG_CAP_KB = _COMPILE_LIMITS.cg_memory_kb() + 64 * 1024
 RUN_TIME_CAP_SEC = APLUSB_TIME_MS / 1000.0 + 1.5
 RUN_WALL_CAP_SEC = APLUSB_WALL_MS / 1000.0 + 1.5
 RUN_CG_CAP_KB = APLUSB_CG_MEM_KB + 64 * 1024
@@ -137,12 +139,13 @@ class SubmissionOutcome:
 
     @property
     def compile_meta(self) -> IsolateMeta | None:
-        if self.result is None or self.result.compile_digest is None:
+        if self.result is None:
             return None
-        compiled = CompileJobResult.from_storage(
-            self.storage, self.result.compile_digest
-        )
-        return compiled.meta
+        digest = self.result.compile_digests.get(ProgramRole.SOLUTION)
+        if digest is None:
+            return None
+        compiled = CompileJobResult.from_storage(self.storage, digest)
+        return None if compiled is None else compiled.meta
 
     def run_results(self) -> list[SimpleRunJobResult]:
         if self.result is None:
