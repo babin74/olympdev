@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import ClassVar
 
 from olympdev.isolate import (
     COMPILE_PROFILE,
@@ -13,6 +14,7 @@ from olympdev.settings import Language, get_settings
 from olympdev.storage import AbstractStorage
 from olympdev.worker.cache.policy import CachePolicy
 from olympdev.worker.job import AbstractJob, JobContext, JobStatus
+from olympdev.worker.roles import ROLE_SPECS, ProgramRole, RoleSpec, job_class_name
 
 _COMPILER_NAME = re.compile(
     r"^(?:g\+\+|gcc|clang\+\+|clang|c\+\+|cc|python3|python)(?:-\d+(?:\.\d+)*)?$"
@@ -164,6 +166,8 @@ class CompileJobResult(StorageModel):
 
 class CompileJob(AbstractJob):
     job_type = "compile"
+    #: Which program this compile produces; None for the generic base job.
+    role: ClassVar[ProgramRole | None] = None
 
     def get_description(self) -> str:
         return "Compile source files into a binary"
@@ -284,51 +288,39 @@ class CompileJob(AbstractJob):
             return self.job_result
 
 
-class SolutionCompileJob(CompileJob):
-    job_type = "solution_compile"
+def _make_compile_job_class(spec: RoleSpec) -> type[CompileJob]:
+    """One compile job class per role; they differ only in these three values."""
 
-    def get_description(self) -> str:
-        return "Compile a participant solution"
+    def get_description(self: CompileJob) -> str:
+        return f"Compile {spec.label.lower()}"
 
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.SolutionCompile
+    def get_cache_policy(self: CompileJob) -> CachePolicy:
+        return spec.compile_cache_policy
 
-
-class ModelSolutionCompileJob(CompileJob):
-    job_type = "model_solution_compile"
-
-    def get_description(self) -> str:
-        return "Compile a model solution"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.ModelSolutionCompile
-
-
-class CheckerCompileJob(CompileJob):
-    job_type = "checker_compile"
-
-    def get_description(self) -> str:
-        return "Compile a checker"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.CheckerCompile
+    return type(
+        job_class_name(spec.compile_job_type),
+        (CompileJob,),
+        {
+            "job_type": spec.compile_job_type,
+            "role": spec.role,
+            "get_description": get_description,
+            "get_cache_policy": get_cache_policy,
+        },
+    )
 
 
-class ValidatorCompileJob(CompileJob):
-    job_type = "validator_compile"
-
-    def get_description(self) -> str:
-        return "Compile a validator"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.ValidatorCompile
+COMPILE_JOB_CLASSES: dict[ProgramRole, type[CompileJob]] = {
+    role: _make_compile_job_class(spec) for role, spec in ROLE_SPECS.items()
+}
 
 
-class GeneratorCompileJob(CompileJob):
-    job_type = "generator_compile"
+def compile_job_class(role: ProgramRole) -> type[CompileJob]:
+    return COMPILE_JOB_CLASSES[role]
 
-    def get_description(self) -> str:
-        return "Compile a generator"
 
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.GeneratorCompile
+# Named aliases, kept so imports and the job registry stay stable.
+SolutionCompileJob = COMPILE_JOB_CLASSES[ProgramRole.SOLUTION]
+ModelSolutionCompileJob = COMPILE_JOB_CLASSES[ProgramRole.MODEL]
+CheckerCompileJob = COMPILE_JOB_CLASSES[ProgramRole.CHECKER]
+ValidatorCompileJob = COMPILE_JOB_CLASSES[ProgramRole.VALIDATOR]
+GeneratorCompileJob = COMPILE_JOB_CLASSES[ProgramRole.GENERATOR]

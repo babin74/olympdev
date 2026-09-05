@@ -1,10 +1,18 @@
 from pathlib import Path
+from typing import ClassVar
 
 from olympdev.isolate import IsolateLimits, SIMPLE_RUN_BINARY, SIMPLE_RUN_INPUT
 from olympdev.schema import FrozenModel
 from olympdev.storage import AbstractStorage
 from olympdev.worker.cache.policy import CachePolicy
 from olympdev.worker.job import JobContext
+from olympdev.worker.roles import (
+    ROLE_SPECS,
+    ProgramRole,
+    RoleSpec,
+    RunKind,
+    job_class_name,
+)
 from olympdev.worker.jobs.sandbox import (
     SandboxJobResult,
     SandboxRunJob,
@@ -27,6 +35,7 @@ class SimpleRunJobArguments(FrozenModel):
 
 class SimpleRunJob(SandboxRunJob):
     job_type = "simple_run"
+    role: ClassVar[ProgramRole | None] = None
 
     def get_description(self) -> str:
         return "Run a program on given input"
@@ -99,21 +108,30 @@ class SimpleRunJob(SandboxRunJob):
         )
 
 
-class SolutionRunJob(SimpleRunJob):
-    job_type = "solution_run"
+def _make_simple_run_job_class(spec: RoleSpec) -> type[SimpleRunJob]:
+    def get_description(self: SimpleRunJob) -> str:
+        return f"Run {spec.label.lower()}"
 
-    def get_description(self) -> str:
-        return "Run a participant solution"
+    def get_cache_policy(self: SimpleRunJob) -> CachePolicy:
+        return spec.run_cache_policy
 
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.SolutionRun
+    return type(
+        job_class_name(spec.run_job_type),
+        (SimpleRunJob,),
+        {
+            "job_type": spec.run_job_type,
+            "role": spec.role,
+            "get_description": get_description,
+            "get_cache_policy": get_cache_policy,
+        },
+    )
 
 
-class ModelSolutionRunJob(SimpleRunJob):
-    job_type = "model_solution_run"
+SIMPLE_RUN_JOB_CLASSES: dict[ProgramRole, type[SimpleRunJob]] = {
+    role: _make_simple_run_job_class(spec)
+    for role, spec in ROLE_SPECS.items()
+    if spec.run_kind is RunKind.SIMPLE
+}
 
-    def get_description(self) -> str:
-        return "Run a model solution"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.ModelSolutionRun
+SolutionRunJob = SIMPLE_RUN_JOB_CLASSES[ProgramRole.SOLUTION]
+ModelSolutionRunJob = SIMPLE_RUN_JOB_CLASSES[ProgramRole.MODEL]

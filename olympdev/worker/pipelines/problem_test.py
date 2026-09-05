@@ -8,6 +8,7 @@ from olympdev.problem.types import ProblemConfiguration
 from olympdev.schema import FrozenModel, StorageModel
 from olympdev.storage import AbstractStorage
 from olympdev.worker.job import JobStatus
+from olympdev.worker.roles import REQUIRED_ROLES, ProgramRole
 from olympdev.worker.jobs.simple_run import (
     ModelSolutionRunJob,
     SimpleRunJobResult,
@@ -98,33 +99,20 @@ class RunLimits(FrozenModel):
 class TestingContext(FrozenModel):
     limits: RunLimits
     problem_name: str | None = None
-    solution_binary_name: str | None = None
-    checker_binary_name: str | None = None
-    model_binary_name: str | None = None
-    generator_binary_name: str | None = None
-    validator_binary_name: str | None = None
+    #: Display name of each role's binary, for job labels. Absent roles simply
+    #: have no entry.
+    binary_names: dict[ProgramRole, str] = {}
 
     def labels(
-        self, *, binary: str | None = None, test: str | None = None
+        self,
+        role: ProgramRole | None = None,
+        test: str | None = None,
     ) -> dict[str, str]:
         return testing_labels(
-            problem_name=self.problem_name, binary=binary, test=test
+            problem_name=self.problem_name,
+            binary=None if role is None else self.binary_names.get(role),
+            test=test,
         )
-
-    def solution_labels(self, test: str | None = None) -> dict[str, str]:
-        return self.labels(binary=self.solution_binary_name, test=test)
-
-    def checker_labels(self, test: str | None = None) -> dict[str, str]:
-        return self.labels(binary=self.checker_binary_name, test=test)
-
-    def model_labels(self, test: str | None = None) -> dict[str, str]:
-        return self.labels(binary=self.model_binary_name, test=test)
-
-    def generator_labels(self, test: str | None = None) -> dict[str, str]:
-        return self.labels(binary=self.generator_binary_name, test=test)
-
-    def validator_labels(self, test: str | None = None) -> dict[str, str]:
-        return self.labels(binary=self.validator_binary_name, test=test)
 
     def testing_kwargs(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in TestingContext.model_fields}
@@ -147,18 +135,28 @@ class ProblemTestArguments(TestingContext, StorageModel):
     name: str
     input_digest: str | None
     output_digest: str | None
-    program_digest: str
-    checker_program_digest: str
-    model_program_digest: str | None = None
-    generator_program_digest: str | None = None
-    validator_program_digest: str | None = None
+    #: Compiled binary of each role that this problem uses.
+    programs: dict[ProgramRole, str]
     gen_argv: list[str] | None = None
     index: int = 0
+
+    def program(self, role: ProgramRole) -> str | None:
+        return self.programs.get(role)
 
     @model_validator(mode="after")
     def _input_or_gen(self) -> Self:
         if (self.input_digest is None) == (self.gen_argv is None):
             raise ValueError("exactly one of input_digest or gen_argv")
+        return self
+
+    @model_validator(mode="after")
+    def _check_required_roles(self) -> Self:
+        missing = REQUIRED_ROLES - set(self.programs)
+        if missing:
+            raise ValueError(
+                "missing programs: "
+                + ", ".join(sorted(role.value for role in missing))
+            )
         return self
 
     @classmethod
@@ -167,40 +165,25 @@ class ProblemTestArguments(TestingContext, StorageModel):
         parent: TestingContext,
         case: ProblemTestingCase,
         *,
-        program_digest: str,
-        checker_program_digest: str,
-        model_program_digest: str | None,
-        generator_program_digest: str | None,
-        validator_program_digest: str | None,
+        programs: dict[ProgramRole, str],
         index: int,
     ) -> Self:
         return cls(
             name=case.name,
             input_digest=case.input_digest,
             output_digest=case.output_digest,
-            program_digest=program_digest,
-            checker_program_digest=checker_program_digest,
-            model_program_digest=model_program_digest,
-            generator_program_digest=generator_program_digest,
-            validator_program_digest=validator_program_digest,
+            programs=programs,
             gen_argv=case.gen_argv,
             index=index,
             **parent.testing_kwargs(),
         )
 
     def validate_digests(self, storage: AbstractStorage) -> Self:
-        if self.input_digest is not None:
-            storage.validate_digest(self.input_digest)
-        storage.validate_digest(self.program_digest)
-        storage.validate_digest(self.checker_program_digest)
-        if self.output_digest is not None:
-            storage.validate_digest(self.output_digest)
-        if self.model_program_digest is not None:
-            storage.validate_digest(self.model_program_digest)
-        if self.generator_program_digest is not None:
-            storage.validate_digest(self.generator_program_digest)
-        if self.validator_program_digest is not None:
-            storage.validate_digest(self.validator_program_digest)
+        for digest in (self.input_digest, self.output_digest):
+            if digest is not None:
+                storage.validate_digest(digest)
+        for digest in self.programs.values():
+            storage.validate_digest(digest)
         return self
 
 
@@ -329,11 +312,11 @@ class ProblemTestPipeline(AbstractPipeline):
         scheduled = ScheduledJob(
             job=SolutionRunJob(
                 f"run-{args.index}",
-                labels=args.solution_labels(args.name),
+                labels=args.labels(ProgramRole.SOLUTION, args.name),
             ),
             input_digest=SolutionRunJob.make_input_digest(
                 storage,
-                program_digest=args.program_digest,
+                program_digest=args.programs[ProgramRole.SOLUTION],
                 input_digest=input_digest,
                 **args.limits.to_dict(),
             ),
@@ -352,11 +335,11 @@ class ProblemTestPipeline(AbstractPipeline):
         scheduled = ScheduledJob(
             job=CheckerJob(
                 f"check-{args.index}",
-                labels=args.checker_labels(args.name),
+                labels=args.labels(ProgramRole.CHECKER, args.name),
             ),
             input_digest=CheckerJob.make_input_digest(
                 storage,
-                program_digest=args.checker_program_digest,
+                program_digest=args.programs[ProgramRole.CHECKER],
                 file_digests=[
                     (input_digest, "input.txt"),
                     (stdout_digest, "output.txt"),
@@ -375,17 +358,18 @@ class ProblemTestPipeline(AbstractPipeline):
         args: ProblemTestArguments,
         input_digest: str,
     ) -> ScheduledJob | NextJobStatus:
-        if args.model_program_digest is None:
+        model_digest = args.program(ProgramRole.MODEL)
+        if model_digest is None:
             self.fail(f"no answer and no model solution for {args.name}")
             return NextJobStatus.FINISHED
         scheduled = ScheduledJob(
             job=ModelSolutionRunJob(
                 f"model-{args.index}",
-                labels=args.model_labels(args.name),
+                labels=args.labels(ProgramRole.MODEL, args.name),
             ),
             input_digest=ModelSolutionRunJob.make_input_digest(
                 storage,
-                program_digest=args.model_program_digest,
+                program_digest=model_digest,
                 input_digest=input_digest,
                 **args.limits.to_dict(),
             ),
@@ -396,17 +380,18 @@ class ProblemTestPipeline(AbstractPipeline):
     def _issue_gen(
         self, storage: AbstractStorage, args: ProblemTestArguments
     ) -> ScheduledJob | NextJobStatus:
-        if args.generator_program_digest is None or args.gen_argv is None:
+        generator_digest = args.program(ProgramRole.GENERATOR)
+        if generator_digest is None or args.gen_argv is None:
             self.fail(f"no input and no generator for {args.name}")
             return NextJobStatus.FINISHED
         scheduled = ScheduledJob(
             job=GeneratorJob(
                 f"gen-{args.index}",
-                labels=args.generator_labels(args.name),
+                labels=args.labels(ProgramRole.GENERATOR, args.name),
             ),
             input_digest=GeneratorJob.make_input_digest(
                 storage,
-                program_digest=args.generator_program_digest,
+                program_digest=generator_digest,
                 command=args.gen_argv,
                 file_size_limit_kb=args.limits.file_size_limit_kb,
             ),
@@ -420,15 +405,16 @@ class ProblemTestPipeline(AbstractPipeline):
         args: ProblemTestArguments,
         input_digest: str,
     ) -> ScheduledJob:
-        assert args.validator_program_digest is not None
+        validator_digest = args.program(ProgramRole.VALIDATOR)
+        assert validator_digest is not None
         scheduled = ScheduledJob(
             job=ValidatorJob(
                 f"valid-{args.index}",
-                labels=args.validator_labels(args.name),
+                labels=args.labels(ProgramRole.VALIDATOR, args.name),
             ),
             input_digest=ValidatorJob.make_input_digest(
                 storage,
-                program_digest=args.validator_program_digest,
+                program_digest=validator_digest,
                 stdin_digest=input_digest,
             ),
         )
@@ -465,7 +451,7 @@ class ProblemTestPipeline(AbstractPipeline):
         args: ProblemTestArguments,
         input_digest: str,
     ) -> ScheduledJob | NextJobStatus | None:
-        if args.validator_program_digest is None or self._run is not None:
+        if args.program(ProgramRole.VALIDATOR) is None or self._run is not None:
             return None
         if self._valid is None:
             return self._issue_valid(storage, args, input_digest)

@@ -17,7 +17,9 @@ from olympdev.worker.pipeline import (
     run_pipeline,
 )
 from olympdev.worker.pipelines.problem_test import ProblemTestingCase, RunLimits
+from olympdev.worker.roles import ProgramRole
 from olympdev.worker.pipelines.problem_testing import (
+    CompileSpec,
     ProblemTestingArguments,
     ProblemTestingPipeline,
     ProblemTestingResult,
@@ -72,10 +74,15 @@ def _make_digest(
         command = [gxx, "-O2", "-o", "solution", 0]
     return ProblemTestingPipeline.make_input_digest(
         storage,
-        sources=[(source, "main.cpp")],
-        command=command,
-        checker_sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
-        checker_command=[gxx, "-O2", "-o", "checker", 0],
+        programs={
+            ProgramRole.SOLUTION: CompileSpec(
+                sources=[(source, "main.cpp")], command=command
+            ),
+            ProgramRole.CHECKER: CompileSpec(
+                sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
+                command=[gxx, "-O2", "-o", "checker", 0],
+            ),
+        },
         configuration=configuration,
         problem_dir=problem_dir,
         problem_name=problem_name,
@@ -85,8 +92,10 @@ def _make_digest(
 def test_problem_testing_result_roundtrip(storage: FileStorage):
     result = ProblemTestingResult(
         verdict=Verdict.WA,
-        compile_digest=storage.upload_bytes(b"compile"),
-        checker_compile_digest=storage.upload_bytes(b"checker"),
+        compile_digests={
+            ProgramRole.SOLUTION: storage.upload_bytes(b"compile"),
+            ProgramRole.CHECKER: storage.upload_bytes(b"checker"),
+        },
         tests=[
             ProblemTestingTestResult(
                 name="sample.in",
@@ -113,16 +122,15 @@ def test_problem_testing_result_roundtrip(storage: FileStorage):
 def test_problem_testing_result_from_dict():
     data = {
         "verdict": "CE",
-        "compile_digest": "a" * 64,
-        "checker_compile_digest": "b" * 64,
+        "compile_digests": {"solution": "a" * 64, "checker": "b" * 64},
         "tests": [],
     }
 
     result = ProblemTestingResult.from_dict(data)
 
     assert result.verdict is Verdict.CE
-    assert result.compile_digest == data["compile_digest"]
-    assert result.checker_compile_digest == data["checker_compile_digest"]
+    assert result.compile_digests[ProgramRole.SOLUTION] == "a" * 64
+    assert result.compile_digests[ProgramRole.CHECKER] == "b" * 64
     assert result.tests == []
 
 
@@ -140,8 +148,8 @@ def test_make_input_digest_stores_aspace_limit(
     assert arguments["limits"]["time_limit_ms"] == 1000
     assert arguments["limits"]["wall_time_ms"] == 2000
     assert arguments["limits"]["memory_limit_mb"] == 64
-    assert storage.exists(arguments["compile_input_digest"])
-    assert storage.exists(arguments["checker_compile_input_digest"])
+    assert storage.exists(arguments["compiles"]["solution"])
+    assert storage.exists(arguments["compiles"]["checker"])
     assert len(arguments["tests"]) == 1
     assert arguments["tests"][0]["name"] == "sample.in"
     assert storage.exists(arguments["tests"][0]["input_digest"])
@@ -180,8 +188,8 @@ def test_parse_arguments_roundtrip(
     assert arguments.limits.memory_limit_mb == 64
     assert len(arguments.tests) == 1
     assert arguments.tests[0].name == "sample.in"
-    assert arguments.solution_binary_name == "hello"
-    assert arguments.checker_binary_name == "exact_checker"
+    assert arguments.binary_names[ProgramRole.SOLUTION] == "hello"
+    assert arguments.binary_names[ProgramRole.CHECKER] == "exact_checker"
     assert arguments.problem_name is None
 
 
@@ -210,12 +218,12 @@ def test_issued_jobs_carry_display_labels(
     assert isinstance(checker_job, ScheduledJob)
     assert checker_job.job.labels == {"Problem": "aplusb", "Binary": "exact_checker"}
 
-    assert args.solution_labels("tests/sample-01.txt") == {
+    assert args.labels(ProgramRole.SOLUTION, "tests/sample-01.txt") == {
         "Problem": "aplusb",
         "Test": "sample-01.txt",
         "Binary": "hello",
     }
-    assert args.checker_labels("sample.in") == {
+    assert args.labels(ProgramRole.CHECKER, "sample.in") == {
         "Problem": "aplusb",
         "Test": "sample.in",
         "Binary": "exact_checker",
@@ -275,7 +283,7 @@ def test_problem_testing_success(
     result = pipeline.get_result(storage)
     assert result is not None
     assert result.verdict is Verdict.OK
-    assert result.compile_digest is not None
+    assert ProgramRole.SOLUTION in result.compile_digests
     assert len(result.tests) == 1
     assert result.tests[0].verdict is Verdict.OK
     assert result.tests[0].check_digest is not None
@@ -321,10 +329,16 @@ def test_problem_testing_compilation_error(
     configuration = _configuration(tmp_path)
     input_digest = ProblemTestingPipeline.make_input_digest(
         storage,
-        sources=[(b"int main() { syntax error", "main.cpp")],
-        command=[gxx, "-O2", "-o", "solution", 0],
-        checker_sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
-        checker_command=[gxx, "-O2", "-o", "checker", 0],
+        programs={
+            ProgramRole.SOLUTION: CompileSpec(
+                sources=[(b"int main() { syntax error", "main.cpp")],
+                command=[gxx, "-O2", "-o", "solution", 0],
+            ),
+            ProgramRole.CHECKER: CompileSpec(
+                sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
+                command=[gxx, "-O2", "-o", "checker", 0],
+            ),
+        },
         configuration=configuration,
         problem_dir=tmp_path,
     )
@@ -343,8 +357,8 @@ def test_problem_testing_compilation_error(
     assert result is not None
     assert result.verdict is Verdict.CE
     assert result.tests == []
-    assert result.compile_digest is not None
-    compile_data = storage.download_dictionary(result.compile_digest)
+    solution_compile = result.compile_digests[ProgramRole.SOLUTION]
+    compile_data = storage.download_dictionary(solution_compile)
     assert IsolateMeta(**compile_data["meta"]).exitcode != 0
 
 
@@ -393,10 +407,18 @@ def test_store_test_rejects_path_escape(
     with pytest.raises(ValueError, match=r"\.\.|relative"):
         ProblemTestingPipeline.make_input_digest(
             storage,
-            sources=[(test_assets_path / "hello.cpp", "main.cpp")],
-            command=[gxx, "-O2", "-o", "solution", 0],
-            checker_sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
-            checker_command=[gxx, "-O2", "-o", "checker", 0],
+            programs={
+                ProgramRole.SOLUTION: CompileSpec(
+                    sources=[(test_assets_path / "hello.cpp", "main.cpp")],
+                    command=[gxx, "-O2", "-o", "solution", 0],
+                ),
+                ProgramRole.CHECKER: CompileSpec(
+                    sources=[
+                        (test_assets_path / "exact_checker.cpp", "checker.cpp")
+                    ],
+                    command=[gxx, "-O2", "-o", "checker", 0],
+                ),
+            },
             configuration=configuration,
             problem_dir=tmp_path,
         )
@@ -430,10 +452,18 @@ def test_store_test_rejects_symlink(
     with pytest.raises(ValueError, match="symlink"):
         ProblemTestingPipeline.make_input_digest(
             storage,
-            sources=[(test_assets_path / "hello.cpp", "main.cpp")],
-            command=[gxx, "-O2", "-o", "solution", 0],
-            checker_sources=[(test_assets_path / "exact_checker.cpp", "checker.cpp")],
-            checker_command=[gxx, "-O2", "-o", "checker", 0],
+            programs={
+                ProgramRole.SOLUTION: CompileSpec(
+                    sources=[(test_assets_path / "hello.cpp", "main.cpp")],
+                    command=[gxx, "-O2", "-o", "solution", 0],
+                ),
+                ProgramRole.CHECKER: CompileSpec(
+                    sources=[
+                        (test_assets_path / "exact_checker.cpp", "checker.cpp")
+                    ],
+                    command=[gxx, "-O2", "-o", "checker", 0],
+                ),
+            },
             configuration=configuration,
             problem_dir=tmp_path,
         )
@@ -474,9 +504,11 @@ def test_problem_testing_arguments_requires_generator_for_gen_cmd():
     )
     with pytest.raises(ValidationError, match="generator is required"):
         ProblemTestingArguments(
-            compile_input_digest=digest,
-            checker_compile_input_digest=digest,
-            model_compile_input_digest=digest,
+            compiles={
+                ProgramRole.SOLUTION: digest,
+                ProgramRole.CHECKER: digest,
+                ProgramRole.MODEL: digest,
+            },
             limits=limits,
             tests=[ProblemTestingCase(name="random-01.txt", gen_argv=["-c", "1e3"])],
         )

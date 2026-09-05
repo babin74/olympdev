@@ -23,7 +23,11 @@ from olympdev.worker.pipeline import (
     ScheduledJob,
     run_pipeline,
 )
-from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_testing import (
+    CompileSpec,
+    ProblemTestingPipeline,
+)
+from olympdev.worker.roles import ProgramRole
 from olympdev.worker.verdict import Verdict
 
 pytestmark = pytest.mark.slow
@@ -89,25 +93,37 @@ def _aplusb_digest(
     with asset_file("testlib.h") as testlib:
         return ProblemTestingPipeline.make_input_digest(
             storage,
-            sources=[(source, "main.cpp")],
-            command=[gxx, "-O2", "-o", "solution", 0],
-            checker_sources=[
-                (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            checker_command=[gxx, "-O2", "-o", "checker", 0],
-            model_sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
-            model_command=[gxx, "-O2", "-o", "model", 0],
-            generator_sources=[
-                (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            generator_command=[gxx, "-O2", "-o", "gen", 0],
-            validator_sources=[
-                (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            validator_command=[gxx, "-O2", "-o", "valid", 0],
+            programs={
+                ProgramRole.SOLUTION: CompileSpec(
+                    sources=[(source, "main.cpp")],
+                    command=[gxx, "-O2", "-o", "solution", 0],
+                ),
+                ProgramRole.CHECKER: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[gxx, "-O2", "-o", "checker", 0],
+                ),
+                ProgramRole.MODEL: CompileSpec(
+                    sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
+                    command=[gxx, "-O2", "-o", "model", 0],
+                ),
+                ProgramRole.GENERATOR: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[gxx, "-O2", "-o", "gen", 0],
+                ),
+                ProgramRole.VALIDATOR: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[gxx, "-O2", "-o", "valid", 0],
+                ),
+            },
             configuration=_aplusb_configuration(),
             problem_dir=aplusb_dir,
             problem_name="aplusb",
@@ -157,12 +173,12 @@ def test_aplusb_main_solution_ok_without_output_files(
         storage, aplusb_dir, source=aplusb_dir / "solutions" / "sol-ac.cpp"
     )
     arguments = storage.download_dictionary(input_digest)
-    assert arguments["model_compile_input_digest"] is not None
-    assert arguments["generator_compile_input_digest"] is not None
-    assert arguments["validator_compile_input_digest"] is not None
-    assert arguments["model_binary_name"] == "sol-ac"
-    assert arguments["generator_binary_name"] == "gen"
-    assert arguments["validator_binary_name"] == "valid"
+    assert set(arguments["compiles"]) == {
+        "solution", "checker", "model", "generator", "validator",
+    }
+    assert arguments["binary_names"]["model"] == "sol-ac"
+    assert arguments["binary_names"]["generator"] == "gen"
+    assert arguments["binary_names"]["validator"] == "valid"
     assert all(test["output_digest"] is None for test in arguments["tests"])
     assert [test["name"] for test in arguments["tests"]] == list(_TEST_NAMES)
     assert arguments["tests"][2]["input_digest"] is not None
@@ -178,9 +194,13 @@ def test_aplusb_main_solution_ok_without_output_files(
     result = pipeline.get_result(storage)
     assert result is not None
     assert result.verdict is Verdict.OK
-    assert result.model_compile_digest is not None
-    assert result.generator_compile_digest is not None
-    assert result.validator_compile_digest is not None
+    assert set(result.compile_digests) == {
+        ProgramRole.SOLUTION,
+        ProgramRole.CHECKER,
+        ProgramRole.MODEL,
+        ProgramRole.GENERATOR,
+        ProgramRole.VALIDATOR,
+    }
     assert [test.name for test in result.tests] == list(_TEST_NAMES)
     assert [test.verdict for test in result.tests] == [Verdict.OK] * len(_TEST_NAMES)
     assert all(test.check_digest is not None for test in result.tests)
@@ -215,8 +235,8 @@ def test_aplusb_validates_static_input_before_run_and_model(
     pipeline = ProblemTestingPipeline("aplusb")
     context = _context(storage, isolate_factory, input_digest)
     args = pipeline._parse_arguments(context)
-    assert args.validator_binary_name == "valid"
-    assert args.validator_labels("tests/sample-01.txt") == {
+    assert args.binary_names[ProgramRole.VALIDATOR] == "valid"
+    assert args.labels(ProgramRole.VALIDATOR, "tests/sample-01.txt") == {
         "Problem": "aplusb",
         "Test": "sample-01.txt",
         "Binary": "valid",

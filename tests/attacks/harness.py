@@ -32,7 +32,11 @@ from olympdev.worker.job import JobContext, JobStatus
 from olympdev.worker.jobs.compile import COMPILE_JOB_LIMITS, CompileJob, CompileJobResult
 from olympdev.worker.jobs.simple_run import SimpleRunJob, SimpleRunJobResult
 from olympdev.worker.pipeline import PipelineContext, PipelineStatus, run_pipeline
-from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.problem_testing import (
+    CompileSpec,
+    ProblemTestingPipeline,
+)
+from olympdev.worker.roles import ProgramRole
 from olympdev.worker.verdict import Verdict
 
 PAYLOADS = Path(__file__).resolve().parent / "payloads"
@@ -150,25 +154,37 @@ def submit_aplusb_cpp(
     with asset_file("testlib.h") as testlib:
         return ProblemTestingPipeline.make_input_digest(
             storage,
-            sources=[(source, sandbox_name)],
-            command=[compiler, "-O2", "-o", "solution", 0],
-            checker_sources=[
-                (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            checker_command=[compiler, "-O2", "-o", "checker", 0],
-            model_sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
-            model_command=[compiler, "-O2", "-o", "model", 0],
-            generator_sources=[
-                (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            generator_command=[compiler, "-O2", "-o", "gen", 0],
-            validator_sources=[
-                (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
-                (testlib, "testlib.h"),
-            ],
-            validator_command=[compiler, "-O2", "-o", "valid", 0],
+            programs={
+                ProgramRole.SOLUTION: CompileSpec(
+                    sources=[(source, sandbox_name)],
+                    command=[compiler, "-O2", "-o", "solution", 0],
+                ),
+                ProgramRole.CHECKER: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "ncmp.cpp", "ncmp.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[compiler, "-O2", "-o", "checker", 0],
+                ),
+                ProgramRole.MODEL: CompileSpec(
+                    sources=[(aplusb_dir / "solutions" / "sol-ac.cpp", "model.cpp")],
+                    command=[compiler, "-O2", "-o", "model", 0],
+                ),
+                ProgramRole.GENERATOR: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "gen.cpp", "gen.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[compiler, "-O2", "-o", "gen", 0],
+                ),
+                ProgramRole.VALIDATOR: CompileSpec(
+                    sources=[
+                        (aplusb_dir / "source" / "valid.cpp", "valid.cpp"),
+                        (testlib, "testlib.h"),
+                    ],
+                    command=[compiler, "-O2", "-o", "valid", 0],
+                ),
+            },
             configuration=aplusb_configuration(),
             problem_dir=aplusb_dir,
             problem_name="aplusb",

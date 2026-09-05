@@ -14,6 +14,13 @@ from olympdev.schema import FrozenModel
 from olympdev.storage import AbstractStorage
 from olympdev.worker.cache.policy import CachePolicy
 from olympdev.worker.job import JobContext
+from olympdev.worker.roles import (
+    ROLE_SPECS,
+    ProgramRole,
+    RoleSpec,
+    RunKind,
+    job_class_name,
+)
 from olympdev.worker.jobs.sandbox import (
     SandboxJobResult,
     SandboxRunJob,
@@ -66,6 +73,7 @@ def _validate_command(command: list[str]) -> list[str]:
 class ToolRunJob(SandboxRunJob):
     job_type = "tool_run"
     sandbox_profile: ClassVar[SandboxProfile] = TOOL_PROFILE
+    role: ClassVar[ProgramRole | None] = None
 
     def get_description(self) -> str:
         return "Run a tool (checker, validator, or generator)"
@@ -172,31 +180,31 @@ class ToolRunJob(SandboxRunJob):
         )
 
 
-class GeneratorJob(ToolRunJob):
-    job_type = "generator"
+def _make_tool_run_job_class(spec: RoleSpec) -> type[ToolRunJob]:
+    def get_description(self: ToolRunJob) -> str:
+        return f"Run {spec.label.lower()}"
 
-    def get_description(self) -> str:
-        return "Generate a test input"
+    def get_cache_policy(self: ToolRunJob) -> CachePolicy:
+        return spec.run_cache_policy
 
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.Generator
-
-
-class ValidatorJob(ToolRunJob):
-    job_type = "validator"
-
-    def get_description(self) -> str:
-        return "Validate a test input"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.Validator
+    return type(
+        job_class_name(spec.run_job_type),
+        (ToolRunJob,),
+        {
+            "job_type": spec.run_job_type,
+            "role": spec.role,
+            "get_description": get_description,
+            "get_cache_policy": get_cache_policy,
+        },
+    )
 
 
-class CheckerJob(ToolRunJob):
-    job_type = "checker"
+TOOL_RUN_JOB_CLASSES: dict[ProgramRole, type[ToolRunJob]] = {
+    role: _make_tool_run_job_class(spec)
+    for role, spec in ROLE_SPECS.items()
+    if spec.run_kind is RunKind.TOOL
+}
 
-    def get_description(self) -> str:
-        return "Check a solution output"
-
-    def get_cache_policy(self) -> CachePolicy:
-        return CachePolicy.Checker
+GeneratorJob = TOOL_RUN_JOB_CLASSES[ProgramRole.GENERATOR]
+ValidatorJob = TOOL_RUN_JOB_CLASSES[ProgramRole.VALIDATOR]
+CheckerJob = TOOL_RUN_JOB_CLASSES[ProgramRole.CHECKER]
