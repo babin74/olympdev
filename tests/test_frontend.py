@@ -17,7 +17,6 @@ from olympdev.frontend.view import (
     JobView,
     PipelineRunView,
     SolutionColumnView,
-    TestingReportView,
     TestRowView,
     UsageView,
     VerificationReportView,
@@ -32,25 +31,33 @@ from olympdev.worker.verdict import Verdict
 CONTEST = Path(__file__).resolve().parent.parent / "example-contest"
 
 
-def _report() -> TestingReportView:
-    return TestingReportView.from_columns(
-        [
-            SolutionColumnView(
-                name="sol-ac.cpp",
-                tag="main",
+def _verification_report() -> VerificationReportView:
+    column = SolutionColumnView(
+        name="sol-ac",
+        tag="main",
+        verdict=Verdict.OK,
+        matched=True,
+        tests=[
+            TestRowView(
+                name="sample-01.txt",
                 verdict=Verdict.OK,
-                wall_seconds=1.25,
-                tests=[
-                    TestRowView(
-                        name="sample-01.txt",
-                        verdict=Verdict.OK,
-                        usage=UsageView(cpu_ms=4.0, wall_ms=5.0, memory_kb=2048),
-                    )
-                ],
-            ),
-            SolutionColumnView(name="sol-wa.cpp", tag="WA", verdict=Verdict.WA),
+                usage=UsageView(cpu_ms=4.0, wall_ms=5.0, memory_kb=2048),
+            )
         ],
+    )
+    mismatch = SolutionColumnView(
+        name="sol-wa",
+        tag="WA",
+        verdict=Verdict.OK,
+        matched=False,
+        reason="missing required verdict WA",
+    )
+    return VerificationReportView(
+        matched=False,
+        status=PipelineStatus.COMPLETED,
         problem_name="aplusb",
+        test_names=["sample-01.txt"],
+        columns=[column, mismatch],
     )
 
 
@@ -94,27 +101,29 @@ def test_time_text_is_a_dash_when_nothing_was_measured():
     assert UsageView().time_text == "—"
 
 
-def test_column_totals_cpu_across_tests_against_the_run_wall_clock():
+def test_column_time_text_is_the_peak_test_not_the_total():
+    """Peaks each clock independently - the worst CPU test need not be the worst wall test."""
     column = SolutionColumnView(
         name="sol.cpp",
-        wall_seconds=3.0,
         tests=[
             TestRowView(
-                name="a", verdict=Verdict.OK, usage=UsageView(cpu_ms=100.0, wall_ms=120.0)
+                name="a", verdict=Verdict.OK, usage=UsageView(cpu_ms=250.0, wall_ms=120.0)
             ),
             TestRowView(
-                name="b", verdict=Verdict.OK, usage=UsageView(cpu_ms=250.0, wall_ms=260.0)
+                name="b", verdict=Verdict.OK, usage=UsageView(cpu_ms=100.0, wall_ms=260.0)
             ),
         ],
     )
-    assert column.cpu_seconds == pytest.approx(0.35)
-    assert column.time_text == "350/3000 ms"
+    assert column.peak_cpu_ms == 250.0
+    assert column.peak_wall_ms == 260.0
+    assert column.time_text == "250/260 ms"
 
 
-def test_column_without_results_reports_no_cpu():
-    column = SolutionColumnView(name="sol.cpp", wall_seconds=1.0)
-    assert column.cpu_seconds is None
-    assert column.time_text == "—/1000 ms"
+def test_column_without_results_reports_no_peak():
+    column = SolutionColumnView(name="sol.cpp")
+    assert column.peak_cpu_ms is None
+    assert column.peak_wall_ms is None
+    assert column.time_text == "—"
 
 
 def test_usage_prefers_cgroup_memory_and_falls_back_to_rss():
@@ -127,21 +136,12 @@ def test_usage_prefers_cgroup_memory_and_falls_back_to_rss():
 
 
 def test_report_rows_align_ragged_columns():
-    report = _report()
+    report = _verification_report()
     assert report.test_names == ["sample-01.txt"]
     (name, cells) = report.rows()[0]
     assert name == "sample-01.txt"
     assert cells[0] is not None and cells[0].verdict is Verdict.OK
     assert cells[1] is None, "a solution with no results leaves an empty cell"
-
-
-def test_text_report_contains_verdicts_and_wall_times():
-    rendered = text_view.render_testing_report(_report())
-    assert "aplusb" in rendered
-    assert "sol-ac.cpp [OK]" in rendered
-    assert "OK 4.0/5.0 ms" in rendered
-    assert "cpu/wall" in rendered
-    assert "4.0/1250 ms" in rendered, "column totals CPU over the run's wall clock"
 
 
 def test_text_pipeline_run_lists_tests():
@@ -163,53 +163,14 @@ def test_text_pipeline_run_lists_tests():
     assert "12/20 ms" in rendered
 
 
-def test_html_renders_the_same_view_model():
-    from olympdev.frontend import html as html_view
-
-    report = _report()
-    markup = html_view.render_testing_report(report)
-    assert "aplusb" in markup
-    assert "sol-ac.cpp" in markup
-    assert "od-v-OK" in markup, "verdict colour comes from the shared stylesheet"
-    assert "od-card" in markup
-    assert "od-badge" in markup
-
-
-def _verification_report() -> VerificationReportView:
-    column = SolutionColumnView(
-        name="main",
-        tag="main",
-        verdict=Verdict.OK,
-        matched=True,
-        tests=[
-            TestRowView(
-                name="sample-01.txt",
-                verdict=Verdict.OK,
-                usage=UsageView(cpu_ms=4.0, wall_ms=5.0, memory_kb=2048),
-            )
-        ],
-    )
-    mismatch = SolutionColumnView(
-        name="WA",
-        tag="WA",
-        verdict=Verdict.OK,
-        matched=False,
-        reason="missing required verdict WA",
-    )
-    return VerificationReportView(
-        matched=False,
-        status=PipelineStatus.COMPLETED,
-        problem_name="aplusb",
-        test_names=["sample-01.txt"],
-        columns=[column, mismatch],
-    )
-
-
 def test_text_verification_report_shows_match_and_reason():
     rendered = text_view.render_verification_report(_verification_report())
     assert "aplusb: mismatch" in rendered
-    assert "main [OK, match]" in rendered
-    assert "WA [OK, mismatch]" in rendered
+    assert "sol-ac [OK, match]" in rendered
+    assert "sol-wa [OK, mismatch]" in rendered
+    assert "OK 4.0/5.0 ms" in rendered
+    assert "cpu/wall" in rendered
+    assert "4.0/5.0 ms" in rendered, "column header peaks the same test's cpu/wall"
     assert "missing required verdict WA" in rendered
 
 
@@ -218,6 +179,8 @@ def test_html_verification_report_uses_the_view_model():
 
     markup = html_view.render_verification_report(_verification_report())
     assert "aplusb" in markup
+    assert "sol-ac" in markup
+    assert "od-v-OK" in markup, "verdict colour comes from the shared stylesheet"
     assert "od-v-match" in markup
     assert "od-v-mismatch" in markup
     assert "od-card" in markup
@@ -241,8 +204,7 @@ def test_html_escapes_untrusted_text():
 
 
 def test_views_render_themselves_in_a_notebook():
-    assert "<table" in _report()._repr_html_()
-    assert "od-card" in _report()._repr_html_()
+    assert "<table" in _verification_report()._repr_html_()
     assert "od-card" in _verification_report()._repr_html_()
     assert "od-card" in PipelineRunView(
         pipeline_id="p", status=PipelineStatus.COMPLETED
@@ -257,7 +219,7 @@ def test_view_layer_does_not_need_jinja(monkeypatch):
     for name in ("olympdev.frontend.view", "olympdev.frontend.text"):
         module = importlib.reload(importlib.import_module(name))
         assert module is not None
-    assert text_view.render_testing_report(_report())
+    assert text_view.render_verification_report(_verification_report())
 
 
 def test_cli_config_reports_its_source(capsys, tmp_path: Path):

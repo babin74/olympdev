@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from olympdev.frontend.view import PipelineRunView, TestingReportView, VerificationReportView
+from olympdev.frontend.view import PipelineRunView, VerificationReportView
 
 
 def _table(rows: list[list[str]], *, header: list[str]) -> str:
@@ -40,23 +40,6 @@ def render_pipeline_run(view: PipelineRunView) -> str:
             )
         )
     return "\n".join(out)
-
-
-def render_testing_report(view: TestingReportView) -> str:
-    header = ["test"] + [
-        f"{column.name} [{column.verdict_text}]" for column in view.columns
-    ]
-    rows = [
-        [name]
-        + [
-            "—" if cell is None else f"{cell.verdict.value} {cell.usage.time_text}"
-            for cell in cells
-        ]
-        for name, cells in view.rows()
-    ]
-    rows.append(["cpu/wall"] + [column.time_text for column in view.columns])
-    title = f"{view.problem_name}\n" if view.problem_name else ""
-    return title + _table(rows, header=header)
 
 
 def render_verification_report(view: VerificationReportView) -> str:

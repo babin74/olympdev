@@ -1,5 +1,5 @@
 {% set status = view.job_status.value %}
-<article class="od od-card is-{{ status }}">
+<article class="od od-card od-card--tight is-{{ status }}">
     {% include "_base.css" %}
     <header class="od-head">
         <div>
@@ -9,41 +9,25 @@
         <span class="od-badge is-{{ status }}">{{ status }}</span>
     </header>
     {% if view.job_description %}
-    <p class="od-muted" style="margin:8px 0 0;font-size:13px">{{ view.job_description }}</p>
+    <p class="od-muted" style="margin:4px 0 0">{{ view.job_description }}</p>
     {% endif %}
     {% if view.job_labels %}
-    <ul class="od-labels">
+    <p class="od-meta-line">
         {% for name, value in view.job_labels %}
-        <li>
-            <span class="od-label-key">{{ name }}</span>
-            <span class="od-label-value">{{ value }}</span>
-        </li>
+        <span><span class="od-muted">{{ name }}</span> {{ value }}</span>
+        {% if not loop.last %}<span class="od-dot">·</span>{% endif %}
         {% endfor %}
-    </ul>
+    </p>
     {% endif %}
-    <table class="od-rows">
-        <tr>
-            <th>Result</th>
-            <td>
-                {% if view.job_result %}
-                <code title="{{ view.job_result }}">{{ view.job_result }}</code>
-                {% else %}<span class="od-muted">—</span>{% endif %}
-            </td>
-        </tr>
-        {% if view.job_digests %}
-        <tr>
-            <th>Digests</th>
-            <td>
-                <table>
-                    {% for name, digest in view.job_digests %}
-                    <tr>
-                        <td class="od-test-name">{{ name }}</td>
-                        <td><code title="{{ digest }}">{{ digest }}</code></td>
-                    </tr>
-                    {% endfor %}
-                </table>
-            </td>
-        </tr>
-        {% endif %}
-    </table>
+    <p class="od-meta-line">
+        <span>
+            <span class="od-muted">result</span>
+            {% if view.job_result %}<code>{{ view.job_result }}</code>
+            {% else %}<span class="od-muted">—</span>{% endif %}
+        </span>
+        {% for name, digest in view.job_digests %}
+        <span class="od-dot">·</span>
+        <span><span class="od-muted">{{ name }}</span> <code title="{{ digest }}">{{ digest[:10] }}…</code></span>
+        {% endfor %}
+    </p>
 </article>

@@ -13,24 +13,25 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[notebook]"     # без extra — только ядро, без HTML-видов
 
-olympdev compare example-contest         # все решения задачи, матрица тест × решение
-olympdev run example-contest --solution WA
-olympdev verify example-contest          # решения соответствуют своим тегам
+olympdev run example-contest --solution sol-wa
+olympdev verify example-contest          # все решения задачи, сверка с тегами
 ```
 
 ```
-aplusb
-test                 sol-ac.cpp [OK]  sol-wa.cpp [WA]  sol-tl.cpp [TL]
--------------------  ---------------  ---------------  ---------------
-tests/sample-01.txt  OK 1.0/39 ms     WA 1.0/16 ms     OK 1.0/102 ms
-tests/manual-01.txt  OK 1.0/1.0 ms    WA 1.0/16 ms     TL 3.0/2101 ms
-cpu/wall             6.0/3388 ms      6.0/328 ms       14/2460 ms
+aplusb: match  (wall 16.73s)
+test                 sol-ac [OK, match]  sol-wa [WA, match]  sol-tl [TL, match]
+-------------------  ------------------  ------------------  ------------------
+tests/sample-01.txt  OK 1.0/1.0 ms       WA 2.0/30 ms        OK 2.0/92 ms
+tests/manual-01.txt  OK 1.0/1.0 ms       WA 1.0/1.0 ms       TL 4.0/2001 ms
+cpu/wall             1.0/1.0 ms          2.0/30 ms           4.0/2001 ms
 ```
 
 Время показывается как `<time>/<wall>` — процессорное и астрономическое.
-Одного числа мало: решение, которое спит, почти не тратит CPU (`3.0/2101 ms`
-выше — это именно sleep, а не тяжёлый цикл), а на загруженном хосте
-астрономическое время завышено относительно реальной работы.
+Строка `cpu/wall` под таблицей — не сумма по тестам, а пик каждого времени
+по отдельности: худший тест по CPU и худший тест по wall-time (не обязательно
+один и тот же). Одного числа мало: решение, которое спит, почти не тратит CPU
+(`4.0/2001 ms` выше — это именно sleep, а не тяжёлый цикл), а на загруженном
+хосте астрономическое время завышено относительно реальной работы.
 
 Из Python — то же самое:
 
@@ -156,10 +157,9 @@ from olympdev.notebook import Workbench
 wb = Workbench.open("example-contest", jobs=4)
 p = wb.problem("aplusb")
 
-p.run("main")               # PipelineRunView, рисует себя сам
-p.run("TL", trace=True)     # карточки job'ов по мере выполнения
-p.compare()                 # матрица тест × решение, общий кеш между решениями
-p.verify()                  # все решения сверяются с тегами
+p.run()                         # main-решение по умолчанию, PipelineRunView рисует себя сам
+p.run("sol-tl", trace=True)    # решение по имени файла; карточки job'ов по мере выполнения
+p.verify()                     # все решения сверяются с тегами, матрица тест × решение
 ```
 
 `Workbench` владеет хранилищем, пулом песочниц, executor'ом и кешем. Пример —
@@ -169,9 +169,8 @@ p.verify()                  # все решения сверяются с тег
 
 | Команда | Что делает |
 |---|---|
-| `olympdev run <target> [--solution TAG] [--jobs N]` | прогон задачи или контеста |
-| `olympdev compare <target> [--solutions ...]` | матрица тест × решение |
-| `olympdev verify <target> [--solution TAG]` | сверка решений с тегами |
+| `olympdev run <target> [--solution NAME] [--jobs N]` | прогон задачи или контеста |
+| `olympdev verify <target> [--solution NAME]` | сверка решений с тегами, матрица тест × решение |
 | `olympdev compile-commands <target>` | compilation database для clangd/IDE |
 | `olympdev show <digest>` | содержимое блоба из хранилища |
 | `olympdev config` | действующие настройки и их источник |
@@ -191,6 +190,10 @@ p.verify()                  # все решения сверяются с тег
 (`gen`, `check`, `valid`), сэмплы и тесты. Тест — либо файл (`input_file`), либо
 генерация (`gen_cmd` + `name`). Тег `main` обязателен, если решения перечислены;
 теги и типы исходников не должны повторяться.
+
+Решение адресуется только по имени — стему его файла (`sol-wa.cpp` →
+`sol-wa`), например в `--solution` или `p.run(...)`/`p.verify(...)`. Тег —
+не имя, а ожидание по вердиктам; для адресации не используется.
 
 Тег решения задаёт, какие вердикты допустимы при верификации (`olympdev verify`
 / `p.verify()`):

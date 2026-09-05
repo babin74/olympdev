@@ -12,13 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Self
 
-from olympdev.frontend.view import (
-    JobView,
-    PipelineRunView,
-    TestingReportView,
-    VerificationReportView,
-    solution_column,
-)
+from olympdev.frontend.view import JobView, PipelineRunView, VerificationReportView
 from olympdev.isolate import IsolateFactory
 from olympdev.problem.build import (
     build_problem_testing_input,
@@ -71,7 +65,7 @@ class ProblemWorkbench:
         return self.package.name
 
     def solutions(self) -> list[str]:
-        return [solution.tag for solution in self.package.solutions()]
+        return [solution.name for solution in self.package.solutions()]
 
     def input_digest(self, solution: Any = None) -> str:
         return build_problem_testing_input(
@@ -82,7 +76,7 @@ class ProblemWorkbench:
         )
 
     def _resolve(self, solution: Any) -> Any:
-        if isinstance(solution, str) and self.package.configuration.solution(solution):
+        if isinstance(solution, str) and self.package.configuration.solution_by_name(solution):
             return self.package.solution(solution)
         return solution
 
@@ -97,8 +91,8 @@ class ProblemWorkbench:
     ) -> PipelineRunView:
         """Test one solution. ``trace=True`` shows each job as it finishes."""
         observer = NotebookObserver(live=trace)
-        tag = solution if isinstance(solution, str) else "main"
-        pipeline = ProblemTestingPipeline(pipeline_id or f"{self.name}-{tag}")
+        label = solution if isinstance(solution, str) else "main"
+        pipeline = ProblemTestingPipeline(pipeline_id or f"{self.name}-{label}")
         digest = self.input_digest(solution)
         context = PipelineContext(
             input_digest=digest,
@@ -126,48 +120,6 @@ class ProblemWorkbench:
             jobs=observer.jobs,
         )
 
-    def compare(
-        self,
-        tags: list[str] | None = None,
-        *,
-        cache: bool = True,
-        jobs: int | None = None,
-    ) -> TestingReportView:
-        """Test several solutions and lay them out as a test x solution matrix.
-
-        With ``cache`` on, one cache is shared across solutions, so the
-        checker, generator, validator and model are compiled once.
-        """
-        shared = MemoryCacheStorage() if cache else None
-        columns = []
-        for tag in tags or self.solutions():
-            solution = self.package.solution(tag)
-            started = time.perf_counter()
-            pipeline = ProblemTestingPipeline(f"{self.name}-{tag}")
-            context = PipelineContext(
-                input_digest=self.input_digest(solution),
-                storage=self.workbench.storage,
-                isolate_factory=self.workbench.isolate_factory,
-            )
-            executor = JobExecutor(shared if shared is not None else self.workbench.cache)
-            workers = jobs if jobs is not None else self.workbench.jobs
-            if workers > 1:
-                run_pipeline_parallel(
-                    pipeline, context, executor=executor, max_workers=workers
-                )
-            else:
-                run_pipeline(pipeline, context, executor=executor)
-            columns.append(
-                solution_column(
-                    pipeline,
-                    self.workbench.storage,
-                    name=Path(solution.file).name,
-                    tag=tag,
-                    wall_seconds=time.perf_counter() - started,
-                )
-            )
-        return TestingReportView.from_columns(columns, problem_name=self.name)
-
     def verify(
         self,
         solution: Any = None,
@@ -179,8 +131,8 @@ class ProblemWorkbench:
     ) -> VerificationReportView:
         """Check prepared solutions against their tags.
 
-        With no argument, every non-ignored solution is verified. A tag
-        verifies that one solution.
+        With no argument, every non-ignored solution is verified. A name
+        (a solution's file stem) verifies that one solution.
         """
         observer = NotebookObserver(live=trace)
         if solution is None:
@@ -190,15 +142,20 @@ class ProblemWorkbench:
                 settings=self.workbench.settings,
             )
             ident = "verify"
+            names = {s.tag: s.name for s in self.package.verifiable_solutions()}
         else:
+            resolved = self._resolve(solution)
             digest = build_solution_verification_input(
                 self.workbench.storage,
                 self.package,
-                solution=self._resolve(solution),
+                solution=resolved,
                 settings=self.workbench.settings,
             )
             ident = solution if isinstance(solution, str) else getattr(
-                solution, "tag", "verify"
+                solution, "name", "verify"
+            )
+            names = (
+                {resolved.tag: resolved.name} if hasattr(resolved, "tag") else {}
             )
         pipeline = ProblemVerificationPipeline(pipeline_id or f"{self.name}-{ident}")
         context = PipelineContext(
@@ -225,6 +182,7 @@ class ProblemWorkbench:
             problem_name=self.name,
             wall_seconds=time.perf_counter() - started,
             jobs=observer.jobs,
+            solution_names=names,
         )
 
 

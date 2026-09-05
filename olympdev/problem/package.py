@@ -72,17 +72,21 @@ class ProblemPackage:
     def source(self, source_type: ProblemSourceType) -> ProblemSource | None:
         return self.configuration.source(source_type)
 
-    def solution(self, tag: str) -> ProblemSolution:
-        solution = self.configuration.solution(tag)
+    def solution(self, name: str) -> ProblemSolution:
+        """Look up a solution by its file's stem - the only way to address one."""
+        solution = self.configuration.solution_by_name(name)
         if solution is None:
             available = ", ".join(
-                sorted(item.tag for item in self.configuration.solutions)
+                sorted(item.name for item in self.configuration.solutions)
             ) or "none"
-            raise KeyError(f"no solution tagged {tag!r} in {self.name} (have: {available})")
+            raise KeyError(f"no solution named {name!r} in {self.name} (have: {available})")
         return solution
 
     def main_solution(self) -> ProblemSolution:
-        return self.solution("main")
+        solution = self.configuration.main_solution()
+        if solution is None:
+            raise KeyError(f"no solution tagged 'main' in {self.name}")
+        return solution
 
     def solutions(self) -> list[ProblemSolution]:
         return list(self.configuration.solutions)

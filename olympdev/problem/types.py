@@ -156,6 +156,15 @@ class ProblemSolution(FrozenModel):
         parse_solution_tag(self.tag)
         return self
 
+    @property
+    def name(self) -> str:
+        """The solution's identity for addressing - its file's stem.
+
+        The tag is a verdict expectation (``WA``, ``TL+ML?``, ...), not a
+        name a solution was given, so it is never used to address one.
+        """
+        return Path(self.file).stem
+
     def is_main_solution(self) -> bool:
         return self.tag == "main"
 
@@ -235,6 +244,7 @@ class ProblemConfiguration(FrozenModel):
                 f"too many tests: {n_tests} (max {caps.max_tests_per_problem})"
             )
         self._check_solution_tags()
+        self._check_solution_names()
         self._check_sources()
         return self
 
@@ -250,6 +260,17 @@ class ProblemConfiguration(FrozenModel):
             seen[solution.tag] = solution.file
         if self.solutions and "main" not in seen:
             raise ValueError("a problem with solutions needs one tagged 'main'")
+
+    def _check_solution_names(self) -> None:
+        """A solution is addressed by its file's stem, so those must be unique."""
+        seen: dict[str, str] = {}
+        for solution in self.solutions:
+            if solution.name in seen:
+                raise ValueError(
+                    f"duplicate solution name {solution.name!r}: "
+                    f"{seen[solution.name]} and {solution.file}"
+                )
+            seen[solution.name] = solution.file
 
     def _check_sources(self) -> None:
         seen: dict[ProblemSourceType, str] = {}
@@ -277,14 +298,17 @@ class ProblemConfiguration(FrozenModel):
                 return source
         return None
 
-    def solution(self, tag: str) -> ProblemSolution | None:
+    def solution_by_name(self, name: str) -> ProblemSolution | None:
         for solution in self.solutions:
-            if solution.tag == tag:
+            if solution.name == name:
                 return solution
         return None
 
     def main_solution(self) -> ProblemSolution | None:
-        return self.solution("main")
+        for solution in self.solutions:
+            if solution.tag == "main":
+                return solution
+        return None
 
     def needs_model_solution(self) -> bool:
         """True when some test has no answer file, so one must be generated."""

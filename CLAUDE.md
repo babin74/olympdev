@@ -124,7 +124,7 @@ pipeline loops all follow from the table — do not hand-write job subclasses.
 
 ```bash
 pip install -e ".[notebook]"      # core install omits jinja2 on purpose
-olympdev compare example-contest  # end-to-end check on the sample problem
+olympdev verify example-contest   # end-to-end check on the sample problem
 olympdev config                   # which settings applied, and from which file
 pytest tests -m "not slow"
 ```

@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import cache
 from pathlib import Path
 
-from olympdev.frontend.view import JobView, PipelineRunView, TestingReportView, VerificationReportView
+from olympdev.frontend.view import JobView, PipelineRunView, VerificationReportView
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 
@@ -39,10 +39,6 @@ def render_job(view: JobView) -> str:
 
 def render_pipeline_run(view: PipelineRunView) -> str:
     return _render("pipeline_run.html", view)
-
-
-def render_testing_report(view: TestingReportView) -> str:
-    return _render("testing_report.html", view)
 
 
 def render_verification_report(view: VerificationReportView) -> str:

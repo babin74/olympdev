@@ -90,12 +90,19 @@ def test_missing_checker_is_reported_at_load_not_at_run(tmp_path: Path):
         ProblemPackage.load(tmp_path).role_files()
 
 
-def test_solution_lookup_by_tag(contest_dir: Path):
+def test_solution_lookup_by_name(contest_dir: Path):
     package = ProblemPackage.load(contest_dir / "aplusb")
-    assert package.solution("WA").file == "solutions/sol-wa.cpp"
+    assert package.solution("sol-wa").file == "solutions/sol-wa.cpp"
     assert package.main_solution().file == "solutions/sol-ac.cpp"
-    with pytest.raises(KeyError, match="no solution tagged 'nope'"):
+    with pytest.raises(KeyError, match="no solution named 'nope'"):
         package.solution("nope")
+
+
+def test_solution_is_not_addressed_by_its_tag(contest_dir: Path):
+    """The tag is a verdict expectation, not a name - it does not address."""
+    package = ProblemPackage.load(contest_dir / "aplusb")
+    with pytest.raises(KeyError, match="no solution named 'WA'"):
+        package.solution("WA")
 
 
 def test_duplicate_solution_tags_are_rejected():
@@ -107,6 +114,19 @@ def test_duplicate_solution_tags_are_rejected():
                 {"file": "a.cpp", "tag": "main"},
                 {"file": "b.cpp", "tag": "WA"},
                 {"file": "c.cpp", "tag": "WA"},
+            ],
+        })
+
+
+def test_duplicate_solution_names_are_rejected():
+    """Two solutions with the same file stem would be ambiguous to address."""
+    with pytest.raises(ValidationError, match="duplicate solution name 'sol'"):
+        ProblemConfiguration.model_validate({
+            "time_limit_ms": 1000,
+            "memory_limit_mb": 64,
+            "solutions": [
+                {"file": "sol.cpp", "tag": "main"},
+                {"file": "variants/sol.cpp", "tag": "WA"},
             ],
         })
 
@@ -188,10 +208,10 @@ def test_build_input_accepts_raw_submitted_bytes(storage: FileStorage, contest_d
     assert storage.exists(arguments["compiles"]["solution"])
 
 
-def test_build_input_selects_a_solution_by_tag(storage: FileStorage, contest_dir: Path):
+def test_build_input_selects_a_solution_by_name(storage: FileStorage, contest_dir: Path):
     package = ProblemPackage.load(contest_dir / "aplusb")
     wa = build_problem_testing_input(
-        storage, package, solution=package.solution("WA")
+        storage, package, solution=package.solution("sol-wa")
     )
     main = build_problem_testing_input(storage, package)
     assert wa != main
@@ -242,14 +262,14 @@ def test_build_solution_verification_rejects_ignore(
     )
     package = ProblemPackage.load(tmp_path)
     with pytest.raises(ValueError, match="ignored"):
-        build_solution_verification_input(storage, package, solution="ignore")
+        build_solution_verification_input(storage, package, solution="skip")
 
 
 def test_build_solution_verification_wraps_testing_input(
     storage: FileStorage, contest_dir: Path
 ):
     package = ProblemPackage.load(contest_dir / "aplusb")
-    digest = build_solution_verification_input(storage, package, solution="WA")
+    digest = build_solution_verification_input(storage, package, solution="sol-wa")
     arguments = storage.download_dictionary(digest)
     assert [item["tag"] for item in arguments["solutions"]] == ["WA"]
     assert storage.exists(arguments["solutions"][0]["testing_digest"])

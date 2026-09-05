@@ -165,6 +165,19 @@ def _cpu_seconds(tests: list["TestRowView"]) -> float | None:
     return sum(values) / 1000.0 if values else None
 
 
+def _peak_usage(tests: list["TestRowView"]) -> tuple[float | None, float | None]:
+    """The worst single test: peak CPU and peak wall time, independently.
+
+    Each clock is maxed on its own - the test that used the most CPU need not
+    be the one that took the longest wall time - so together they answer "how
+    close did this solution get to TL/ML on its hardest test", which a sum
+    across every test does not.
+    """
+    cpu = [test.usage.cpu_ms for test in tests if test.usage.cpu_ms is not None]
+    wall = [test.usage.wall_ms for test in tests if test.usage.wall_ms is not None]
+    return (max(cpu) if cpu else None, max(wall) if wall else None)
+
+
 class PipelineRunView(FrozenModel):
     """One pipeline run: its outcome, its jobs and its per-test results."""
 
@@ -246,7 +259,6 @@ class SolutionColumnView(FrozenModel):
     name: str
     tag: str | None = None
     verdict: Verdict | None = None
-    wall_seconds: float | None = None
     matched: bool | None = None
     reason: str | None = None
     tests: list[TestRowView] = []
@@ -262,74 +274,20 @@ class SolutionColumnView(FrozenModel):
         return "match" if self.matched else "mismatch"
 
     @property
-    def cpu_seconds(self) -> float | None:
-        return _cpu_seconds(self.tests)
+    def peak_cpu_ms(self) -> float | None:
+        return _peak_usage(self.tests)[0]
+
+    @property
+    def peak_wall_ms(self) -> float | None:
+        return _peak_usage(self.tests)[1]
 
     @property
     def time_text(self) -> str:
-        """CPU burned by the solution over wall time of the whole run."""
-        return format_duration_pair(
-            None if self.cpu_seconds is None else self.cpu_seconds * 1000.0,
-            None if self.wall_seconds is None else self.wall_seconds * 1000.0,
-        )
+        """Peak CPU and peak wall time across this solution's tests."""
+        return format_duration_pair(*_peak_usage(self.tests))
 
     def test(self, index: int) -> TestRowView | None:
         return self.tests[index] if index < len(self.tests) else None
-
-
-class TestingReportView(FrozenModel):
-    """Several solutions over the same tests: the test x solution matrix."""
-
-    problem_name: str | None = None
-    test_names: list[str] = []
-    columns: list[SolutionColumnView] = []
-
-    @classmethod
-    def from_columns(
-        cls,
-        columns: list[SolutionColumnView],
-        *,
-        problem_name: str | None = None,
-    ) -> Self:
-        names: list[str] = []
-        for column in columns:
-            if len(column.tests) > len(names):
-                names = [test.name for test in column.tests]
-        return cls(problem_name=problem_name, test_names=names, columns=columns)
-
-    def rows(self) -> list[tuple[str, list[TestRowView | None]]]:
-        """Each test with one cell per solution; None where a run has no result."""
-        return [
-            (name, [column.test(index) for column in self.columns])
-            for index, name in enumerate(self.test_names)
-        ]
-
-    def _repr_html_(self) -> str:
-        from olympdev.frontend.html import render_testing_report
-
-        return render_testing_report(self)
-
-
-def solution_column(
-    pipeline: AbstractPipeline,
-    storage: AbstractStorage,
-    *,
-    name: str,
-    tag: str | None = None,
-    wall_seconds: float | None = None,
-) -> SolutionColumnView:
-    result = _testing_result(pipeline, storage)
-    return SolutionColumnView(
-        name=name,
-        tag=tag,
-        verdict=None if result is None else result.verdict,
-        wall_seconds=wall_seconds,
-        tests=(
-            []
-            if result is None
-            else [TestRowView.from_result(storage, test) for test in result.tests]
-        ),
-    )
 
 
 class VerificationReportView(FrozenModel):
@@ -353,7 +311,14 @@ class VerificationReportView(FrozenModel):
         problem_name: str | None = None,
         wall_seconds: float | None = None,
         jobs: list[JobView] | None = None,
+        solution_names: dict[str, str] | None = None,
     ) -> Self:
+        """``solution_names`` maps a solution's tag to its display name.
+
+        The pipeline only ever sees tags - the file a tag came from is a
+        submitter-side fact, so the caller (which holds the ``ProblemPackage``)
+        supplies it. Falls back to the tag itself when not given.
+        """
         result = _verification_result(pipeline, storage)
         columns: list[SolutionColumnView] = []
         if result is not None:
@@ -363,7 +328,7 @@ class VerificationReportView(FrozenModel):
                 )
                 columns.append(
                     SolutionColumnView(
-                        name=solution.tag,
+                        name=(solution_names or {}).get(solution.tag, solution.tag),
                         tag=solution.tag,
                         verdict=None if testing is None else testing.verdict,
                         matched=solution.matched,
@@ -378,10 +343,10 @@ class VerificationReportView(FrozenModel):
                         ),
                     )
                 )
-        names: list[str] = []
+        test_names: list[str] = []
         for column in columns:
-            if len(column.tests) > len(names):
-                names = [test.name for test in column.tests]
+            if len(column.tests) > len(test_names):
+                test_names = [test.name for test in column.tests]
         return cls(
             matched=False if result is None else result.matched,
             status=pipeline.get_status(),
@@ -393,7 +358,7 @@ class VerificationReportView(FrozenModel):
             ),
             wall_seconds=wall_seconds,
             jobs=jobs or [],
-            test_names=names,
+            test_names=test_names,
             columns=columns,
         )
 

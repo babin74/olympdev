@@ -16,7 +16,7 @@ from typing import Any
 
 from olympdev.frontend import text as text_view
 from olympdev.frontend.notebook import Workbench
-from olympdev.frontend.view import PipelineRunView, TestingReportView, VerificationReportView
+from olympdev.frontend.view import PipelineRunView, VerificationReportView
 from olympdev.settings import Settings, get_settings, load_settings, set_settings
 from olympdev.storage import open_storage
 
@@ -24,9 +24,7 @@ from olympdev.storage import open_storage
 def _write_html(view: Any, path: Path) -> None:
     from olympdev.frontend import html as html_view
 
-    if isinstance(view, TestingReportView):
-        markup = html_view.render_testing_report(view)
-    elif isinstance(view, PipelineRunView):
+    if isinstance(view, PipelineRunView):
         markup = html_view.render_pipeline_run(view)
     elif isinstance(view, VerificationReportView):
         markup = html_view.render_verification_report(view)
@@ -56,14 +54,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         _emit(view, args, text_view.render_pipeline_run(view))
         failed = failed or (view.verdict is None or view.verdict.value != "OK")
     return 1 if failed and args.strict else 0
-
-
-def cmd_compare(args: argparse.Namespace) -> int:
-    workbench = _workbench(args)
-    name = args.problem or (workbench.problems() or [None])[0]
-    view = workbench.problem(name).compare(args.solutions or None)
-    _emit(view, args, text_view.render_testing_report(view))
-    return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -135,25 +125,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="test a solution against a problem")
     add_target(run)
-    run.add_argument("--solution", default=None, help="solution tag (default: main)")
+    run.add_argument(
+        "--solution", default=None, help="solution name, its file's stem (default: main)"
+    )
     run.add_argument(
         "--strict", action="store_true", help="exit non-zero unless the verdict is OK"
     )
     run.set_defaults(func=cmd_run)
-
-    compare = subparsers.add_parser(
-        "compare", help="test every solution and print the test x solution matrix"
-    )
-    add_target(compare)
-    compare.add_argument("--solutions", nargs="*", help="solution tags to include")
-    compare.set_defaults(func=cmd_compare)
 
     verify = subparsers.add_parser(
         "verify", help="check prepared solutions against their tags"
     )
     add_target(verify)
     verify.add_argument(
-        "--solution", default=None, help="verify one tag (default: every non-ignored solution)"
+        "--solution",
+        default=None,
+        help="verify one solution by name (default: every non-ignored solution)",
     )
     verify.set_defaults(func=cmd_verify)
 
@@ -178,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.config is not None:
         set_settings(load_settings(args.config))
-    if getattr(args, "jobs", None) is None and args.command in {"run", "compare", "verify"}:
+    if getattr(args, "jobs", None) is None and args.command in {"run", "verify"}:
         args.jobs = get_settings().isolate.sandbox_count
     try:
         return args.func(args)
