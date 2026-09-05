@@ -9,7 +9,7 @@
         <span class="od-badge od-v-{{ view.verdict_text }}">{{ view.verdict_text }}</span>
     </header>
     <p class="od-muted" style="margin:8px 0 0">
-        {{ status }}{% if view.wall_seconds is not none %} · {{ view.wall_text }}{% endif %}
+        {{ status }}{% if view.wall_seconds is not none %} · cpu/wall {{ view.time_text }}{% endif %}
     </p>
     {% if view.failure_reason %}
     <p class="od-v-WA" style="margin:8px 0 0">{{ view.failure_reason }}</p>
@@ -18,14 +18,14 @@
     <div class="od-scroll">
     <table class="od-grid" style="margin-top:12px">
         <thead>
-            <tr><th>Test</th><th>Verdict</th><th>Time</th><th>Memory</th></tr>
+            <tr><th>Test</th><th>Verdict</th><th>Time (cpu/wall)</th><th>Memory</th></tr>
         </thead>
         <tbody>
             {% for test in view.tests %}
             <tr>
                 <td class="od-test-name">{{ test.name }}</td>
                 <td class="od-strong od-v-{{ test.verdict.value }}">{{ test.verdict.value }}</td>
-                <td>{{ test.usage.elapsed_text }}</td>
+                <td>{{ test.usage.time_text }}</td>
                 <td>{{ test.usage.memory_text }}</td>
             </tr>
             {% endfor %}

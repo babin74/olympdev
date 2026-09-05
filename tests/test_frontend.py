@@ -43,7 +43,7 @@ def _report() -> TestingReportView:
                     TestRowView(
                         name="sample-01.txt",
                         verdict=Verdict.OK,
-                        usage=UsageView(elapsed_ms=4.0, memory_kb=2048),
+                        usage=UsageView(cpu_ms=4.0, wall_ms=5.0, memory_kb=2048),
                     )
                 ],
             ),
@@ -68,17 +68,52 @@ def test_memory_formatting(kilobytes, expected):
     assert format_memory(kilobytes) == expected
 
 
-def test_timeout_reports_wall_clock_not_cpu():
-    """A sleeping solution burns no CPU; showing CPU time would read as 2 ms."""
-    meta = IsolateMeta(status="TO", time=0.002, time_wall=2.1, max_rss_kb=512)
+def test_usage_keeps_both_clocks():
+    meta = IsolateMeta(status="OK", time=0.25, time_wall=0.31, cg_memory_kb=4096)
     usage = UsageView.from_meta(meta)
-    assert usage.elapsed_ms == pytest.approx(2100.0)
-    assert usage.elapsed_text == "2100 ms"
+    assert usage.cpu_ms == pytest.approx(250.0)
+    assert usage.wall_ms == pytest.approx(310.0)
+    assert usage.time_text == "250/310 ms"
 
 
-def test_normal_run_reports_cpu_time():
-    meta = IsolateMeta(status="OK", time=0.25, time_wall=0.9, cg_memory_kb=4096)
-    assert UsageView.from_meta(meta).elapsed_ms == pytest.approx(250.0)
+def test_a_sleeping_timeout_is_distinguishable_from_a_busy_one():
+    """Either clock alone hides half the story, so both are shown."""
+    sleeping = UsageView.from_meta(
+        IsolateMeta(status="TO", time=0.002, time_wall=2.1, max_rss_kb=512)
+    )
+    busy = UsageView.from_meta(
+        IsolateMeta(status="TO", time=2.05, time_wall=2.1, max_rss_kb=512)
+    )
+    assert sleeping.time_text == "2.0/2100 ms"
+    assert busy.time_text == "2050/2100 ms"
+    assert sleeping.time_text != busy.time_text
+
+
+def test_time_text_is_a_dash_when_nothing_was_measured():
+    assert UsageView().time_text == "—"
+
+
+def test_column_totals_cpu_across_tests_against_the_run_wall_clock():
+    column = SolutionColumnView(
+        name="sol.cpp",
+        wall_seconds=3.0,
+        tests=[
+            TestRowView(
+                name="a", verdict=Verdict.OK, usage=UsageView(cpu_ms=100.0, wall_ms=120.0)
+            ),
+            TestRowView(
+                name="b", verdict=Verdict.OK, usage=UsageView(cpu_ms=250.0, wall_ms=260.0)
+            ),
+        ],
+    )
+    assert column.cpu_seconds == pytest.approx(0.35)
+    assert column.time_text == "350/3000 ms"
+
+
+def test_column_without_results_reports_no_cpu():
+    column = SolutionColumnView(name="sol.cpp", wall_seconds=1.0)
+    assert column.cpu_seconds is None
+    assert column.time_text == "—/1000 ms"
 
 
 def test_usage_prefers_cgroup_memory_and_falls_back_to_rss():
@@ -103,8 +138,9 @@ def test_text_report_contains_verdicts_and_wall_times():
     rendered = text_view.render_testing_report(_report())
     assert "aplusb" in rendered
     assert "sol-ac.cpp [OK]" in rendered
-    assert "OK 4.0 ms" in rendered
-    assert "1250 ms" in rendered
+    assert "OK 4.0/5.0 ms" in rendered
+    assert "cpu/wall" in rendered
+    assert "4.0/1250 ms" in rendered, "column totals CPU over the run's wall clock"
 
 
 def test_text_pipeline_run_lists_tests():
@@ -114,12 +150,16 @@ def test_text_pipeline_run_lists_tests():
         verdict=Verdict.WA,
         problem_name="aplusb",
         wall_seconds=0.5,
-        tests=[TestRowView(name="t", verdict=Verdict.WA)],
+        tests=[
+            TestRowView(
+                name="t", verdict=Verdict.WA, usage=UsageView(cpu_ms=12.0, wall_ms=20.0)
+            )
+        ],
     )
     rendered = text_view.render_pipeline_run(view)
     assert "aplusb: WA" in rendered
-    assert "500 ms" in rendered
-    assert "t" in rendered
+    assert "cpu/wall 12/500 ms" in rendered
+    assert "12/20 ms" in rendered
 
 
 def test_html_renders_the_same_view_model():

@@ -21,10 +21,15 @@ olympdev run example-contest --solution WA
 aplusb
 test                 sol-ac.cpp [OK]  sol-wa.cpp [WA]  sol-tl.cpp [TL]
 -------------------  ---------------  ---------------  ---------------
-tests/sample-01.txt  OK 1.0 ms        WA 1.0 ms        OK 1.0 ms
-tests/manual-01.txt  OK 1.0 ms        WA 1.0 ms        TL 2101 ms
-wall                 3075 ms          328 ms           2452 ms
+tests/sample-01.txt  OK 1.0/39 ms     WA 1.0/16 ms     OK 1.0/102 ms
+tests/manual-01.txt  OK 1.0/1.0 ms    WA 1.0/16 ms     TL 3.0/2101 ms
+cpu/wall             6.0/3388 ms      6.0/328 ms       14/2460 ms
 ```
+
+Время показывается как `<time>/<wall>` — процессорное и астрономическое.
+Одного числа мало: решение, которое спит, почти не тратит CPU (`3.0/2101 ms`
+выше — это именно sleep, а не тяжёлый цикл), а на загруженном хосте
+астрономическое время завышено относительно реальной работы.
 
 Из Python — то же самое:
 

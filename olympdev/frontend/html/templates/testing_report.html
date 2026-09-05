@@ -11,7 +11,7 @@
                     <div class="od-strong">{{ column.name }}</div>
                     {% if column.tag %}<div class="od-muted">{{ column.tag }}</div>{% endif %}
                     <div class="od-strong od-v-{{ column.verdict_text }}">{{ column.verdict_text }}</div>
-                    <div class="od-muted">wall {{ column.wall_text }}</div>
+                    <div class="od-muted">cpu/wall {{ column.time_text }}</div>
                 </th>
                 {% endfor %}
             </tr>
@@ -24,7 +24,7 @@
                 {% if cell %}
                 <td>
                     <div class="od-strong od-v-{{ cell.verdict.value }}">{{ cell.verdict.value }}</div>
-                    <div class="od-muted">{{ cell.usage.elapsed_text }}</div>
+                    <div class="od-muted">{{ cell.usage.time_text }}</div>
                     <div class="od-muted">{{ cell.usage.memory_text }}</div>
                 </td>
                 {% else %}<td class="od-muted">—</td>{% endif %}

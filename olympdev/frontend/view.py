@@ -26,12 +26,27 @@ if TYPE_CHECKING:
     from olympdev.worker.jobs.sandbox import SandboxJobResult
 
 
-def format_duration(milliseconds: float | None) -> str:
+def _duration_number(milliseconds: float | None) -> str:
     if milliseconds is None:
         return "—"
     if milliseconds < 10:
-        return f"{milliseconds:.1f} ms"
-    return f"{milliseconds:.0f} ms"
+        return f"{milliseconds:.1f}"
+    return f"{milliseconds:.0f}"
+
+
+def format_duration(milliseconds: float | None) -> str:
+    if milliseconds is None:
+        return "—"
+    return f"{_duration_number(milliseconds)} ms"
+
+
+def format_duration_pair(
+    cpu_ms: float | None, wall_ms: float | None
+) -> str:
+    """CPU and wall time as ``<time>/<wall>``, sharing one unit."""
+    if cpu_ms is None and wall_ms is None:
+        return "—"
+    return f"{_duration_number(cpu_ms)}/{_duration_number(wall_ms)} ms"
 
 
 def format_memory(kilobytes: int | None) -> str:
@@ -43,25 +58,38 @@ def format_memory(kilobytes: int | None) -> str:
 
 
 class UsageView(FrozenModel):
-    """Time and memory a run actually used."""
+    """Time and memory a run actually used.
 
-    elapsed_ms: float | None = None
+    Both clocks are kept: isolate's ``time`` is CPU, ``time_wall`` is elapsed.
+    Either alone misleads - a solution that sleeps burns almost no CPU and
+    would look instant, while a busy loop on a loaded host looks slower than
+    it is. They are shown together as ``<time>/<wall>``.
+    """
+
+    cpu_ms: float | None = None
+    wall_ms: float | None = None
     memory_kb: int | None = None
 
     @classmethod
     def from_meta(cls, meta: IsolateMeta) -> Self:
-        # isolate's `time` is CPU time. A solution that sleeps hits the wall
-        # clock limit having used almost no CPU, so a timeout reported as CPU
-        # time would read as a few milliseconds.
-        seconds = meta.time_wall if meta.status == "TO" else meta.time
         return cls(
-            elapsed_ms=seconds * 1000.0,
+            cpu_ms=meta.time * 1000.0,
+            wall_ms=meta.time_wall * 1000.0,
             memory_kb=meta.cg_memory_kb or meta.max_rss_kb or None,
         )
 
     @property
-    def elapsed_text(self) -> str:
-        return format_duration(self.elapsed_ms)
+    def time_text(self) -> str:
+        """CPU and wall time as ``<time>/<wall>``."""
+        return format_duration_pair(self.cpu_ms, self.wall_ms)
+
+    @property
+    def cpu_text(self) -> str:
+        return format_duration(self.cpu_ms)
+
+    @property
+    def wall_text(self) -> str:
+        return format_duration(self.wall_ms)
 
     @property
     def memory_text(self) -> str:
@@ -130,6 +158,12 @@ def _run_usage(storage: AbstractStorage, run_digest: str | None) -> UsageView:
     return UsageView.from_meta(result.meta)
 
 
+def _cpu_seconds(tests: list["TestRowView"]) -> float | None:
+    """CPU actually burned across a run's tests."""
+    values = [test.usage.cpu_ms for test in tests if test.usage.cpu_ms is not None]
+    return sum(values) / 1000.0 if values else None
+
+
 class PipelineRunView(FrozenModel):
     """One pipeline run: its outcome, its jobs and its per-test results."""
 
@@ -179,10 +213,16 @@ class PipelineRunView(FrozenModel):
         return "—" if self.verdict is None else self.verdict.value
 
     @property
-    def wall_text(self) -> str:
-        if self.wall_seconds is None:
-            return "—"
-        return format_duration(self.wall_seconds * 1000.0)
+    def cpu_seconds(self) -> float | None:
+        return _cpu_seconds(self.tests)
+
+    @property
+    def time_text(self) -> str:
+        """CPU burned by the solution over wall time of the whole run."""
+        return format_duration_pair(
+            None if self.cpu_seconds is None else self.cpu_seconds * 1000.0,
+            None if self.wall_seconds is None else self.wall_seconds * 1000.0,
+        )
 
     def _repr_html_(self) -> str:
         from olympdev.frontend.html import render_pipeline_run
@@ -213,10 +253,16 @@ class SolutionColumnView(FrozenModel):
         return "—" if self.verdict is None else self.verdict.value
 
     @property
-    def wall_text(self) -> str:
-        if self.wall_seconds is None:
-            return "—"
-        return format_duration(self.wall_seconds * 1000.0)
+    def cpu_seconds(self) -> float | None:
+        return _cpu_seconds(self.tests)
+
+    @property
+    def time_text(self) -> str:
+        """CPU burned by the solution over wall time of the whole run."""
+        return format_duration_pair(
+            None if self.cpu_seconds is None else self.cpu_seconds * 1000.0,
+            None if self.wall_seconds is None else self.wall_seconds * 1000.0,
+        )
 
     def test(self, index: int) -> TestRowView | None:
         return self.tests[index] if index < len(self.tests) else None

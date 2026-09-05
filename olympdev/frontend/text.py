@@ -20,7 +20,7 @@ def _table(rows: list[list[str]], *, header: list[str]) -> str:
 def render_pipeline_run(view: PipelineRunView) -> str:
     head = f"{view.problem_name or view.pipeline_id}: {view.verdict_text}"
     if view.wall_seconds is not None:
-        head += f"  ({view.wall_text})"
+        head += f"  (cpu/wall {view.time_text})"
     out = [head]
     if view.failure_reason:
         out.append(f"  failed: {view.failure_reason}")
@@ -31,12 +31,12 @@ def render_pipeline_run(view: PipelineRunView) -> str:
                     [
                         test.name,
                         test.verdict.value,
-                        test.usage.elapsed_text,
+                        test.usage.time_text,
                         test.usage.memory_text,
                     ]
                     for test in view.tests
                 ],
-                header=["test", "verdict", "time", "memory"],
+                header=["test", "verdict", "cpu/wall", "memory"],
             )
         )
     return "\n".join(out)
@@ -49,11 +49,11 @@ def render_testing_report(view: TestingReportView) -> str:
     rows = [
         [name]
         + [
-            "—" if cell is None else f"{cell.verdict.value} {cell.usage.elapsed_text}"
+            "—" if cell is None else f"{cell.verdict.value} {cell.usage.time_text}"
             for cell in cells
         ]
         for name, cells in view.rows()
     ]
-    rows.append(["wall"] + [column.wall_text for column in view.columns])
+    rows.append(["cpu/wall"] + [column.time_text for column in view.columns])
     title = f"{view.problem_name}\n" if view.problem_name else ""
     return title + _table(rows, header=header)
