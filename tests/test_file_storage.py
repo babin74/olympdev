@@ -19,16 +19,25 @@ def test_storage_root_path(tmp_path: Path):
     assert root.is_dir()
 
 
+def stored_blobs(storage: FileStorage) -> list[Path]:
+    """Committed blobs, ignoring the sharding layout and any temp files."""
+    return [
+        path
+        for path in storage.get_root_path().rglob("*")
+        if path.is_file() and not path.name.startswith(".tmp-")
+    ]
+
+
 def test_storage_bytes(storage: FileStorage):
     content = b"Hello, world!"
     digest = storage.upload_bytes(content)
 
     assert storage.exists(digest)
-    assert (storage.get_root_path() / digest).is_file()
+    assert stored_blobs(storage) == [storage._get_file_path(digest)]
     assert storage.download_bytes(digest) == content
     assert storage.unlink(digest)
     assert not storage.exists(digest)
-    assert not (storage.get_root_path() / digest).exists()
+    assert stored_blobs(storage) == []
 
 
 def test_storage_file(storage: FileStorage, test_assets_path: Path):
@@ -70,7 +79,7 @@ def test_file_and_bytes_share_digest(storage: FileStorage, tmp_path: Path):
     bytes_digest = storage.upload_bytes(content)
     file_digest = storage.upload_file(source)
     assert bytes_digest == file_digest
-    assert list(storage.get_root_path().iterdir()) == [storage.get_root_path() / bytes_digest]
+    assert stored_blobs(storage) == [storage._get_file_path(bytes_digest)]
 
 
 def test_reupload_is_idempotent(storage: FileStorage):
@@ -79,8 +88,7 @@ def test_reupload_is_idempotent(storage: FileStorage):
     second = storage.upload_bytes(content)
     assert first == second
     assert storage.download_bytes(first) == content
-    blobs = list(storage.get_root_path().iterdir())
-    assert len(blobs) == 1
+    assert len(stored_blobs(storage)) == 1
 
 
 def test_empty_bytes(storage: FileStorage):
@@ -130,3 +138,43 @@ def test_upload_file_does_not_follow_symlink(storage: FileStorage, tmp_path: Pat
     link.symlink_to(target)
     with pytest.raises(OSError):
         storage.upload_file(link)
+
+
+def test_uploads_leave_no_temporary_files_behind(storage: FileStorage, tmp_path: Path):
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"x" * 4096)
+    storage.upload_file(source)
+    storage.upload_bytes(b"y" * 4096)
+    leftovers = [
+        path
+        for path in storage.get_root_path().rglob(".tmp-*")
+        if path.is_file()
+    ]
+    assert leftovers == []
+
+
+def test_readers_never_observe_a_partial_blob(storage: FileStorage):
+    """Blobs appear at their digest path only once fully written."""
+    import threading
+
+    payload = b"z" * (4 * 1024 * 1024)
+    digest = storage.get_bytes_digest(payload)
+    torn: list[int] = []
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.is_set():
+            content = storage.download_bytes(digest)
+            if content is not None and content != payload:
+                torn.append(len(content))
+                return
+
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    try:
+        storage.upload_bytes(payload)
+    finally:
+        stop.set()
+        watcher.join(timeout=5)
+    assert torn == []
+    assert storage.download_bytes(digest) == payload

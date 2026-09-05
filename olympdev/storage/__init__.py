@@ -1,7 +1,10 @@
-from olympdev.storage.filestorage import FileStorage
 from olympdev.storage.abstract import AbstractStorage
+from olympdev.storage.caching import CachingStorage, open_storage
+from olympdev.storage.filestorage import FileStorage
 
 __all__ = [
-    "FileStorage",
     "AbstractStorage",
+    "CachingStorage",
+    "FileStorage",
+    "open_storage",
 ]
