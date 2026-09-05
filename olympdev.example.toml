@@ -1,0 +1,44 @@
+# Reference olympdev configuration.
+#
+# Copy to one of these locations to activate it (first match wins):
+#   $OLYMPDEV_CONFIG
+#   ./olympdev.toml
+#   ~/.config/olympdev/config.toml
+#   /etc/olympdev/config.toml
+#
+# Every key is optional; omitted keys keep the built-in default shown here.
+# `olympdev config` prints the effective settings and the file they came from.
+
+[limits]
+# Ceiling for anything this host will run. A problem asking for more is
+# rejected here, so keep these identical across a deployment (or make the
+# worker the lower bound).
+max_time_limit_ms = 300000
+max_wall_time_ms = 600000
+max_memory_limit_mb = 4096
+max_file_size_limit_kb = 262144
+max_extra_time_ms = 10000
+max_tests_per_problem = 1024
+max_test_file_bytes = 33554432
+max_dictionary_bytes = 1048576
+
+[isolate]
+cmd = "isolate"
+# lock_dir = "/var/lib/olympdev/locks"   # default: $TMPDIR/olympdev-isolate-locks
+sandbox_count = 1     # concurrent boxes = parallel jobs
+first_box_id = 1
+quota_blocks = 262144 # isolate --init -q blocks,inodes
+quota_inodes = 4096
+use_cgroups = true
+
+[storage]
+# root = "/var/lib/olympdev/storage"
+# remote_root = "/mnt/shared/olympdev"   # root becomes a pull-through cache
+
+[toolchains.cpp]
+# compiler = "/usr/bin/g++"              # default: first of g++, clang++, c++ on PATH
+flags = ["-O2"]
+# allowed_flags = ["-O2", "-std=c++20"]  # strict allowlist; omit to use the denylist
+
+[toolchains.c]
+flags = ["-O2"]

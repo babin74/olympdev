@@ -39,23 +39,18 @@ def test_build_run_args_aspace_and_cg_memory_independent():
     assert args[cg_index + 1] == "4096"
 
 
-def test_build_run_args_unlimited_memory_omits_limits():
+def test_build_run_args_always_emits_memory_limits():
+    """There is no way to ask for an unbounded run: -m and --cg-mem are always set."""
     args = _build_run_args(
-        IsolateLimits(
-            time_limit_ms=1000,
-            memory_limit_mb=0,
-            aspace_limit_kb=0,
-            cg_memory_limit_kb=0,
-            unlimited_memory=True,
-        ),
+        IsolateLimits(time_limit_ms=1000, memory_limit_mb=64),
         ["/usr/bin/true"],
         meta_path="/tmp/meta",
     )
-    assert "-m" not in args
-    assert "--cg-mem" not in args
+    assert args[args.index("-m") + 1] == "65536"
+    assert args[args.index("--cg-mem") + 1] == "65536"
 
 
-def test_zero_memory_without_unlimited_is_rejected():
+def test_zero_memory_is_rejected():
     with pytest.raises(ValidationError, match="memory_limit_mb"):
         IsolateLimits(time_limit_ms=1000, memory_limit_mb=0)
 

@@ -1,18 +1,16 @@
 from queue import Empty, Queue
 from typing import Self
 
-from olympdev.config import (
-    DEFAULT_SANDBOX_QUOTA_BLOCKS,
-    DEFAULT_SANDBOX_QUOTA_INODES,
-)
 from olympdev.isolate.runner import IsolateSandBox
 from olympdev.isolate.types import IsolateQuota
+from olympdev.settings import MAX_BOX_ID, get_settings
 
-_MAX_SANDBOX_COUNT = 999
-_DEFAULT_QUOTA = IsolateQuota(
-    blocks=DEFAULT_SANDBOX_QUOTA_BLOCKS,
-    inodes=DEFAULT_SANDBOX_QUOTA_INODES,
-)
+_MAX_SANDBOX_COUNT = MAX_BOX_ID
+
+
+def default_quota() -> IsolateQuota:
+    isolate = get_settings().isolate
+    return IsolateQuota(blocks=isolate.quota_blocks, inodes=isolate.quota_inodes)
 
 
 class IsolateFactory:
@@ -31,7 +29,7 @@ class IsolateFactory:
         quota: IsolateQuota | None = None,
         lock_timeout_sec: float | None = None,
     ) -> "Sandbox":
-        applied = _DEFAULT_QUOTA if quota is None else quota
+        applied = default_quota() if quota is None else quota
         return Sandbox(self, applied, lock_timeout_sec)
 
 

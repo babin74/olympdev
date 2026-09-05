@@ -3,7 +3,6 @@ from typing import Callable, Self
 
 from pydantic import model_validator
 
-from olympdev.config import MAX_TESTS_PER_PROBLEM
 from olympdev.problem.types import (
     ProblemConfiguration,
     ProblemTest,
@@ -11,6 +10,7 @@ from olympdev.problem.types import (
     resolve_problem_file,
 )
 from olympdev.schema import StorageModel
+from olympdev.settings import get_settings
 from olympdev.storage import AbstractStorage
 from olympdev.worker.job import JobStatus
 from olympdev.worker.jobs.compile import (
@@ -55,7 +55,7 @@ class ProblemTestingArguments(TestingContext, StorageModel):
 
     @model_validator(mode="after")
     def _check_tests(self) -> Self:
-        if len(self.tests) > MAX_TESTS_PER_PROBLEM:
+        if len(self.tests) > get_settings().limits.max_tests_per_problem:
             raise ValueError(f"too many tests: {len(self.tests)}")
         if (
             any(test.output_digest is None for test in self.tests)

@@ -5,17 +5,8 @@ import shlex
 
 from pydantic import model_validator
 
-from olympdev.config import (
-    MAX_ASPACE_LIMIT_KB,
-    MAX_FILE_SIZE_LIMIT_KB,
-    MAX_MEMORY_LIMIT_MB,
-    MAX_TEST_FILE_BYTES,
-    MAX_TESTS_PER_PROBLEM,
-    MAX_TIME_LIMIT_MS,
-    MAX_WALL_TIME_MS,
-    check_limit_range,
-)
 from olympdev.schema import FrozenModel
+from olympdev.settings import check_limit_range, get_settings
 from olympdev.worker.verdict import Verdict
 
 
@@ -128,46 +119,34 @@ class ProblemConfiguration(FrozenModel):
 
     @model_validator(mode="after")
     def _check_limits(self) -> Self:
+        caps = get_settings().limits
         check_limit_range(
-            "time_limit", self.time_limit, minimum=1, maximum=MAX_TIME_LIMIT_MS
+            "time_limit", self.time_limit, minimum=1, maximum=caps.max_time_limit_ms
         )
         check_limit_range(
             "memory_limit",
             self.memory_limit,
             minimum=1,
-            maximum=MAX_MEMORY_LIMIT_MB,
+            maximum=caps.max_memory_limit_mb,
         )
-        if self.wall_limit is not None:
-            check_limit_range(
-                "wall_limit",
-                self.wall_limit,
-                minimum=1,
-                maximum=MAX_WALL_TIME_MS,
-            )
-        if self.aspace_limit is not None:
-            check_limit_range(
-                "aspace_limit",
-                self.aspace_limit,
-                minimum=1,
-                maximum=MAX_ASPACE_LIMIT_KB,
-            )
-        if self.file_size_limit is not None:
-            check_limit_range(
-                "file_size_limit",
-                self.file_size_limit,
-                minimum=1,
-                maximum=MAX_FILE_SIZE_LIMIT_KB,
-            )
+        optional = (
+            ("wall_limit", self.wall_limit, caps.max_wall_time_ms),
+            ("aspace_limit", self.aspace_limit, caps.max_aspace_limit_kb),
+            ("file_size_limit", self.file_size_limit, caps.max_file_size_limit_kb),
+        )
+        for name, value, maximum in optional:
+            if value is not None:
+                check_limit_range(name, value, minimum=1, maximum=maximum)
         n_tests = len(self.samples) + len(self.tests)
-        if n_tests > MAX_TESTS_PER_PROBLEM:
+        if n_tests > caps.max_tests_per_problem:
             raise ValueError(
-                f"too many tests: {n_tests} (max {MAX_TESTS_PER_PROBLEM})"
+                f"too many tests: {n_tests} (max {caps.max_tests_per_problem})"
             )
         return self
 
     def get_wall_limit(self) -> int:
         if self.wall_limit is None:
-            return min(2 * self.time_limit, MAX_WALL_TIME_MS)
+            return min(2 * self.time_limit, get_settings().limits.max_wall_time_ms)
         return self.wall_limit
 
     def get_file_size_limit(self) -> int:
@@ -192,7 +171,7 @@ def resolve_problem_file(problem_dir: Path, relative: str) -> Path:
         raise ValueError(f"test path escapes problem dir: {relative!r}")
     if not resolved.is_file() or resolved.is_symlink():
         raise FileNotFoundError(relative)
-    if resolved.stat().st_size > MAX_TEST_FILE_BYTES:
+    if resolved.stat().st_size > get_settings().limits.max_test_file_bytes:
         raise ValueError(
             f"test file too large: {relative!r} ({resolved.stat().st_size} bytes)"
         )

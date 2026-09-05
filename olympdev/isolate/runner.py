@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Self
 
-from olympdev.config import ISOLATE_CMD
+from olympdev.settings import get_settings
 from olympdev.isolate.types import (
     IsolateDirectoryRules,
     IsolateLimits,
@@ -44,7 +44,7 @@ def _thread_lock_for(box_id: int) -> threading.Lock:
 
 
 def ensure_isolate_available() -> str:
-    cmd = ISOLATE_CMD
+    cmd = get_settings().isolate.cmd
     candidates: list[Path] = []
     given = Path(cmd)
     if given.is_absolute():
@@ -62,16 +62,11 @@ def ensure_isolate_available() -> str:
         seen.add(candidate)
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate.resolve())
-    raise RuntimeError(
-        f"isolate (cmd={ISOLATE_CMD}) is not available"
-    )
+    raise RuntimeError(f"isolate (cmd={cmd}) is not available")
 
 
 def _lock_dir() -> Path:
-    override = os.getenv("OLYMPDEV_ISOLATE_LOCK_DIR")
-    if override:
-        return Path(override)
-    return Path(tempfile.gettempdir()) / "olympdev-isolate-locks"
+    return get_settings().isolate.resolved_lock_dir()
 
 
 def _build_init_args(quota: IsolateQuota | None = None) -> list[str]:
@@ -103,13 +98,8 @@ def _build_run_args(
         "-w", f"{limits.wall_sec():0.3f}",
         "-x", f"{limits.extra_kill_sec():0.3f}",
     ])
-    if not limits.unlimited_memory:
-        aspace = limits.aspace_kb()
-        if aspace > 0:
-            run_args.extend(["-m", str(aspace)])
-        cg_mem = limits.cg_memory_kb()
-        if cg_mem > 0:
-            run_args.extend(["--cg-mem", str(cg_mem)])
+    run_args.extend(["-m", str(limits.aspace_kb())])
+    run_args.extend(["--cg-mem", str(limits.cg_memory_kb())])
     if limits.file_size_limit_kb is not None:
         run_args.extend(["-f", str(limits.file_size_limit_kb)])
     if processes is not None:

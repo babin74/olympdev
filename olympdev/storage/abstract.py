@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from olympdev.config import MAX_DICTIONARY_BYTES
+from olympdev.settings import get_settings
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -52,9 +52,11 @@ class AbstractStorage(ABC):
         content = self.download_bytes(digest)
         if content is None:
             return None
-        if len(content) > MAX_DICTIONARY_BYTES:
+        max_bytes = get_settings().limits.max_dictionary_bytes
+        if len(content) > max_bytes:
             raise ValueError(
-                f"dictionary blob too large: {len(content)} bytes"
+                f"dictionary blob too large: {len(content)} bytes "
+                f"(max {max_bytes})"
             )
         data = json.loads(content)
         if not isinstance(data, dict):

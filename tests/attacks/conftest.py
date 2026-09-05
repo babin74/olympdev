@@ -25,8 +25,11 @@ from harness import (
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # This hook is handed the whole session's items, not just ours, so mark
+    # only the attack tests. Marking everything made `-m "not slow"` empty.
     for item in items:
-        item.add_marker(pytest.mark.slow)
+        if _ATTACKS_DIR in Path(item.path).parents:
+            item.add_marker(pytest.mark.slow)
 
 
 @pytest.fixture(scope="session")

@@ -6,21 +6,8 @@ from typing import Any, Self
 
 from pydantic import field_validator, model_validator
 
-from olympdev.config import (
-    MAX_ASPACE_LIMIT_KB,
-    MAX_CG_MEMORY_LIMIT_KB,
-    MAX_EXTRA_TIME_MS,
-    MAX_FILE_SIZE_LIMIT_KB,
-    MAX_MEMORY_LIMIT_MB,
-    MAX_TIME_LIMIT_MS,
-    MAX_WALL_TIME_MS,
-    check_limit_range,
-)
 from olympdev.schema import FrozenModel
-
-
-def _check_range(name: str, value: int, *, minimum: int, maximum: int) -> None:
-    check_limit_range(name, value, minimum=minimum, maximum=maximum)
+from olympdev.settings import check_limit_range as _check_range, get_settings
 
 
 class IsolateLimits(FrozenModel):
@@ -31,69 +18,39 @@ class IsolateLimits(FrozenModel):
     aspace_limit_kb: int | None = None
     cg_memory_limit_kb: int | None = None
     file_size_limit_kb: int | None = None
-    # When True, omit -m/--cg-mem. Jobs must not set this.
-    unlimited_memory: bool = False
 
     @model_validator(mode="after")
     def _check_ranges(self) -> Self:
+        caps = get_settings().limits
         _check_range(
-            "time_limit_ms",
-            self.time_limit_ms,
-            minimum=1,
-            maximum=MAX_TIME_LIMIT_MS,
+            "time_limit_ms", self.time_limit_ms,
+            minimum=1, maximum=caps.max_time_limit_ms,
         )
         _check_range(
-            "extra_time_ms",
-            self.extra_time_ms,
-            minimum=0,
-            maximum=MAX_EXTRA_TIME_MS,
+            "extra_time_ms", self.extra_time_ms,
+            minimum=0, maximum=caps.max_extra_time_ms,
         )
-        if self.unlimited_memory:
-            if self.memory_limit_mb < 0:
-                raise ValueError("memory_limit_mb must be non-negative")
-        else:
-            _check_range(
-                "memory_limit_mb",
-                self.memory_limit_mb,
-                minimum=1,
-                maximum=MAX_MEMORY_LIMIT_MB,
-            )
-        if self.wall_time_ms is not None:
-            _check_range(
-                "wall_time_ms",
-                self.wall_time_ms,
-                minimum=1,
-                maximum=MAX_WALL_TIME_MS,
-            )
-        if self.aspace_limit_kb is not None:
-            if self.unlimited_memory:
-                if self.aspace_limit_kb < 0:
-                    raise ValueError("aspace_limit_kb must be non-negative")
-            else:
-                _check_range(
-                    "aspace_limit_kb",
-                    self.aspace_limit_kb,
-                    minimum=1,
-                    maximum=MAX_ASPACE_LIMIT_KB,
-                )
-        if self.cg_memory_limit_kb is not None:
-            if self.unlimited_memory:
-                if self.cg_memory_limit_kb < 0:
-                    raise ValueError("cg_memory_limit_kb must be non-negative")
-            else:
-                _check_range(
-                    "cg_memory_limit_kb",
-                    self.cg_memory_limit_kb,
-                    minimum=1,
-                    maximum=MAX_CG_MEMORY_LIMIT_KB,
-                )
-        if self.file_size_limit_kb is not None:
-            _check_range(
+        _check_range(
+            "memory_limit_mb", self.memory_limit_mb,
+            minimum=1, maximum=caps.max_memory_limit_mb,
+        )
+        optional = (
+            ("wall_time_ms", self.wall_time_ms, caps.max_wall_time_ms),
+            ("aspace_limit_kb", self.aspace_limit_kb, caps.max_aspace_limit_kb),
+            (
+                "cg_memory_limit_kb",
+                self.cg_memory_limit_kb,
+                caps.max_cg_memory_limit_kb,
+            ),
+            (
                 "file_size_limit_kb",
                 self.file_size_limit_kb,
-                minimum=1,
-                maximum=MAX_FILE_SIZE_LIMIT_KB,
-            )
+                caps.max_file_size_limit_kb,
+            ),
+        )
+        for name, value, maximum in optional:
+            if value is not None:
+                _check_range(name, value, minimum=1, maximum=maximum)
         return self
 
     @classmethod
