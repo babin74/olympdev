@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Any, Self
 
 from pydantic import model_validator
 
@@ -28,14 +28,6 @@ from olympdev.worker.pipeline import (
     ScheduledJob,
 )
 from olympdev.worker.verdict import Verdict
-
-_IN_FLIGHT = (JobStatus.PENDING, JobStatus.RUNNING)
-_TResult = TypeVar("_TResult", bound=StorageModel)
-
-
-def _in_flight(job: ScheduledJob | None) -> bool:
-    return job is not None and job.job.get_status() in _IN_FLIGHT
-
 
 def testing_labels(
     *,
@@ -197,15 +189,19 @@ class ProblemTestResult(StorageModel):
 class ProblemTestPipeline(AbstractPipeline):
     """Run a solution on one test, then the checker if the solution produced output."""
 
+    pipeline_type = "problem_test"
+
+    #: Step names in this pipeline's step table.
+    GEN = "gen"
+    VALID = "valid"
+    RUN = "run"
+    MODEL = "model"
+    CHECK = "check"
+
     def __init__(self, pipeline_id: str = "problem-test"):
         super().__init__(pipeline_id)
+        # Cache only: re-derived from storage after a restore.
         self._arguments: ProblemTestArguments | None = None
-        self._gen: ScheduledJob | None = None
-        self._valid: ScheduledJob | None = None
-        self._run: ScheduledJob | None = None
-        self._model: ScheduledJob | None = None
-        self._check: ScheduledJob | None = None
-        self._generated_input: str | None = None
 
     @classmethod
     def make_input_digest(
@@ -231,26 +227,21 @@ class ProblemTestPipeline(AbstractPipeline):
         return ProblemTestResult.from_storage(storage, digest)
 
     def run_not_started(self) -> bool:
-        return self._run is None
+        return not self.has_step(self.RUN)
 
     def is_busy(self) -> bool:
-        return (
-            _in_flight(self._gen)
-            or _in_flight(self._valid)
-            or _in_flight(self._run)
-            or _in_flight(self._model)
-            or _in_flight(self._check)
-        )
+        return self.any_step_in_flight()
 
     def has_participant_answer(self, storage: AbstractStorage) -> bool:
+        run = self.step(self.RUN)
         if (
-            self._run is None
-            or self._check is not None
-            or _in_flight(self._run)
-            or _in_flight(self._model)
+            run is None
+            or self.has_step(self.CHECK)
+            or self.step_in_flight(self.RUN)
+            or self.step_in_flight(self.MODEL)
         ):
             return False
-        if self._run.job.get_status() is not JobStatus.COMPLETED:
+        if run.job.get_status() is not JobStatus.COMPLETED:
             return False
         result = self._load_run(storage)
         return result is not None and solution_verdict(result.meta) is None
@@ -267,9 +258,9 @@ class ProblemTestPipeline(AbstractPipeline):
         if valid_step is not None:
             return valid_step
 
-        if self._run is None:
+        if not self.has_step(self.RUN):
             return self._issue_run(storage, args, input_digest)
-        if _in_flight(self._run):
+        if self.step_in_flight(self.RUN):
             return NextJobStatus.WAITING
 
         run_result, run_digest = self._take_run(storage, args)
@@ -284,15 +275,15 @@ class ProblemTestPipeline(AbstractPipeline):
         if answer_digest is None:
             if self.is_finished():
                 return NextJobStatus.FINISHED
-            if _in_flight(self._model):
+            if self.step_in_flight(self.MODEL):
                 return NextJobStatus.WAITING
             return self._issue_model(storage, args, input_digest)
 
-        if self._check is None:
+        if not self.has_step(self.CHECK):
             return self._issue_check(
                 storage, args, input_digest, run_result.stdout_digest, answer_digest
             )
-        if _in_flight(self._check):
+        if self.step_in_flight(self.CHECK):
             return NextJobStatus.WAITING
 
         check_verdict, check_digest = self._take_check(storage, args)
@@ -309,20 +300,18 @@ class ProblemTestPipeline(AbstractPipeline):
         if not storage.exists(input_digest):
             self.fail(f"missing test input {args.name}")
             return NextJobStatus.FINISHED
-        scheduled = ScheduledJob(
-            job=SolutionRunJob(
-                f"run-{args.index}",
-                labels=args.labels(ProgramRole.SOLUTION, args.name),
-            ),
-            input_digest=SolutionRunJob.make_input_digest(
+        return self.issue(
+            self.RUN,
+            SolutionRunJob,
+            SolutionRunJob.make_input_digest(
                 storage,
                 program_digest=args.programs[ProgramRole.SOLUTION],
                 input_digest=input_digest,
                 **args.limits.to_dict(),
             ),
+            job_id=f"run-{args.index}",
+            labels=args.labels(ProgramRole.SOLUTION, args.name),
         )
-        self._run = scheduled
-        return scheduled
 
     def _issue_check(
         self,
@@ -332,12 +321,10 @@ class ProblemTestPipeline(AbstractPipeline):
         stdout_digest: str,
         answer_digest: str,
     ) -> ScheduledJob:
-        scheduled = ScheduledJob(
-            job=CheckerJob(
-                f"check-{args.index}",
-                labels=args.labels(ProgramRole.CHECKER, args.name),
-            ),
-            input_digest=CheckerJob.make_input_digest(
+        return self.issue(
+            self.CHECK,
+            CheckerJob,
+            CheckerJob.make_input_digest(
                 storage,
                 program_digest=args.programs[ProgramRole.CHECKER],
                 file_digests=[
@@ -348,9 +335,9 @@ class ProblemTestPipeline(AbstractPipeline):
                 command=["input.txt", "output.txt", "answer.txt"],
                 file_size_limit_kb=16 * 1024,
             ),
+            job_id=f"check-{args.index}",
+            labels=args.labels(ProgramRole.CHECKER, args.name),
         )
-        self._check = scheduled
-        return scheduled
 
     def _issue_model(
         self,
@@ -362,20 +349,18 @@ class ProblemTestPipeline(AbstractPipeline):
         if model_digest is None:
             self.fail(f"no answer and no model solution for {args.name}")
             return NextJobStatus.FINISHED
-        scheduled = ScheduledJob(
-            job=ModelSolutionRunJob(
-                f"model-{args.index}",
-                labels=args.labels(ProgramRole.MODEL, args.name),
-            ),
-            input_digest=ModelSolutionRunJob.make_input_digest(
+        return self.issue(
+            self.MODEL,
+            ModelSolutionRunJob,
+            ModelSolutionRunJob.make_input_digest(
                 storage,
                 program_digest=model_digest,
                 input_digest=input_digest,
                 **args.limits.to_dict(),
             ),
+            job_id=f"model-{args.index}",
+            labels=args.labels(ProgramRole.MODEL, args.name),
         )
-        self._model = scheduled
-        return scheduled
 
     def _issue_gen(
         self, storage: AbstractStorage, args: ProblemTestArguments
@@ -384,20 +369,18 @@ class ProblemTestPipeline(AbstractPipeline):
         if generator_digest is None or args.gen_argv is None:
             self.fail(f"no input and no generator for {args.name}")
             return NextJobStatus.FINISHED
-        scheduled = ScheduledJob(
-            job=GeneratorJob(
-                f"gen-{args.index}",
-                labels=args.labels(ProgramRole.GENERATOR, args.name),
-            ),
-            input_digest=GeneratorJob.make_input_digest(
+        return self.issue(
+            self.GEN,
+            GeneratorJob,
+            GeneratorJob.make_input_digest(
                 storage,
                 program_digest=generator_digest,
                 command=args.gen_argv,
                 file_size_limit_kb=args.limits.file_size_limit_kb,
             ),
+            job_id=f"gen-{args.index}",
+            labels=args.labels(ProgramRole.GENERATOR, args.name),
         )
-        self._gen = scheduled
-        return scheduled
 
     def _issue_valid(
         self,
@@ -407,43 +390,39 @@ class ProblemTestPipeline(AbstractPipeline):
     ) -> ScheduledJob:
         validator_digest = args.program(ProgramRole.VALIDATOR)
         assert validator_digest is not None
-        scheduled = ScheduledJob(
-            job=ValidatorJob(
-                f"valid-{args.index}",
-                labels=args.labels(ProgramRole.VALIDATOR, args.name),
-            ),
-            input_digest=ValidatorJob.make_input_digest(
+        return self.issue(
+            self.VALID,
+            ValidatorJob,
+            ValidatorJob.make_input_digest(
                 storage,
                 program_digest=validator_digest,
                 stdin_digest=input_digest,
             ),
+            job_id=f"valid-{args.index}",
+            labels=args.labels(ProgramRole.VALIDATOR, args.name),
         )
-        self._valid = scheduled
-        return scheduled
 
     def _ensure_input(
         self, storage: AbstractStorage, args: ProblemTestArguments
     ) -> str | ScheduledJob | NextJobStatus:
         if args.input_digest is not None:
             return args.input_digest
-        if self._generated_input is not None:
-            return self._generated_input
-        if self._gen is None:
+        if not self.has_step(self.GEN):
             return self._issue_gen(storage, args)
-        if _in_flight(self._gen):
+        if self.step_in_flight(self.GEN):
             return NextJobStatus.WAITING
-        gen_result, _digest = self._take_job_output(
-            self._gen,
-            storage,
+        gen_result, _digest = self.step_result(
+            self.GEN,
             ToolRunJobResult,
-            f"missing generator result for {args.name}",
+            storage,
+            missing=f"missing generator result for {args.name}",
         )
         if gen_result is None:
             return NextJobStatus.FINISHED
         if not _tool_ok(gen_result.meta):
             return self._finish(storage, args, Verdict.CF, None, None)
-        self._generated_input = gen_result.stdout_digest
-        return self._generated_input
+        # Derived from the step table, so a restored pipeline finds it again.
+        return gen_result.stdout_digest
 
     def _ensure_validated(
         self,
@@ -451,17 +430,17 @@ class ProblemTestPipeline(AbstractPipeline):
         args: ProblemTestArguments,
         input_digest: str,
     ) -> ScheduledJob | NextJobStatus | None:
-        if args.program(ProgramRole.VALIDATOR) is None or self._run is not None:
+        if args.program(ProgramRole.VALIDATOR) is None or self.has_step(self.RUN):
             return None
-        if self._valid is None:
+        if not self.has_step(self.VALID):
             return self._issue_valid(storage, args, input_digest)
-        if _in_flight(self._valid):
+        if self.step_in_flight(self.VALID):
             return NextJobStatus.WAITING
-        valid_result, _digest = self._take_job_output(
-            self._valid,
-            storage,
+        valid_result, _digest = self.step_result(
+            self.VALID,
             ToolRunJobResult,
-            f"missing validator result for {args.name}",
+            storage,
+            missing=f"missing validator result for {args.name}",
         )
         if valid_result is None:
             return NextJobStatus.FINISHED
@@ -477,13 +456,13 @@ class ProblemTestPipeline(AbstractPipeline):
     ) -> str | None:
         if args.output_digest is not None:
             return args.output_digest
-        if self._model is None or _in_flight(self._model):
+        if not self.has_step(self.MODEL) or self.step_in_flight(self.MODEL):
             return None
-        model_result, _model_digest = self._take_job_output(
-            self._model,
-            storage,
+        model_result, _model_digest = self.step_result(
+            self.MODEL,
             SimpleRunJobResult,
-            f"missing model result for {args.name}",
+            storage,
+            missing=f"missing model result for {args.name}",
         )
         if model_result is None:
             return None
@@ -493,53 +472,31 @@ class ProblemTestPipeline(AbstractPipeline):
         return model_result.stdout_digest
 
     def _load_run(self, storage: AbstractStorage) -> SimpleRunJobResult | None:
-        assert self._run is not None
-        digest = self._run.job.get_output_digest()
+        run = self.step(self.RUN)
+        assert run is not None
+        digest = run.job.get_output_digest()
         if digest is None:
             return None
         return SimpleRunJobResult.from_storage(storage, digest)
 
-    def _take_job_output(
-        self,
-        scheduled: ScheduledJob,
-        storage: AbstractStorage,
-        result_type: type[_TResult],
-        missing: str,
-    ) -> tuple[_TResult, str] | tuple[None, None]:
-        if scheduled.job.get_status() is JobStatus.FAILED:
-            self.fail(scheduled.job.get_failure_reason())
-            return None, None
-        digest = scheduled.job.get_output_digest()
-        result = (
-            result_type.from_storage(
-                storage, digest) if digest is not None else None
-        )
-        if result is None:
-            self.fail(missing)
-            return None, None
-        assert digest is not None
-        return result, digest
-
     def _take_run(
         self, storage: AbstractStorage, args: ProblemTestArguments
     ) -> tuple[SimpleRunJobResult, str] | tuple[None, None]:
-        assert self._run is not None
-        return self._take_job_output(
-            self._run,
-            storage,
+        return self.step_result(
+            self.RUN,
             SimpleRunJobResult,
-            f"missing run result for {args.name}",
+            storage,
+            missing=f"missing run result for {args.name}",
         )
 
     def _take_check(
         self, storage: AbstractStorage, args: ProblemTestArguments
     ) -> tuple[Verdict, str] | tuple[None, None]:
-        assert self._check is not None
-        check_result, check_digest = self._take_job_output(
-            self._check,
-            storage,
+        check_result, check_digest = self.step_result(
+            self.CHECK,
             ToolRunJobResult,
-            f"missing checker result for {args.name}",
+            storage,
+            missing=f"missing checker result for {args.name}",
         )
         if check_result is None:
             return None, None

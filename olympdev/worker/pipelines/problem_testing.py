@@ -140,15 +140,20 @@ def _store_test(
     )
 
 
+def _compile_step(role: ProgramRole) -> str:
+    return f"compile-{role.value}"
+
+
 class ProblemTestingPipeline(AbstractPipeline):
     """Compile every role the problem uses, then run each test as a child pipeline."""
 
+    pipeline_type = "problem_testing"
+
     def __init__(self, pipeline_id: str = "problem-testing"):
         super().__init__(pipeline_id)
+        # Caches only: both are re-derived from storage after a restore.
         self._arguments: ProblemTestingArguments | None = None
-        self._compiles: dict[ProgramRole, ScheduledJob] = {}
-        self._programs: dict[ProgramRole, str] | None = None
-        self._tests: list[ScheduledPipeline] | None = None
+        self._programs_cache: dict[ProgramRole, str] | None = None
 
     @classmethod
     def make_input_digest(
@@ -241,20 +246,18 @@ class ProblemTestingPipeline(AbstractPipeline):
     def _step_compiles(
         self, context: PipelineContext, args: ProblemTestingArguments
     ) -> ScheduledJob | NextJobStatus | None:
-        if self._programs is not None:
+        if self._programs_cache is not None:
             return None
         for role in args.roles():
-            if role not in self._compiles:
-                scheduled = ScheduledJob(
-                    job=compile_job_class(role)(
-                        f"compile-{role.value}",
-                        labels=args.labels(role),
-                    ),
-                    input_digest=args.compiles[role],
+            step = _compile_step(role)
+            if not self.has_step(step):
+                return self.issue(
+                    step,
+                    compile_job_class(role),
+                    args.compiles[role],
+                    labels=args.labels(role),
                 )
-                self._compiles[role] = scheduled
-                return scheduled
-        if any(_in_flight(job) for job in self._compiles.values()):
+        if self.any_step_in_flight():
             return NextJobStatus.WAITING
         return self._finish_compiles(context.storage, args)
 
@@ -263,7 +266,8 @@ class ProblemTestingPipeline(AbstractPipeline):
     ) -> NextJobStatus | None:
         programs: dict[ProgramRole, str] = {}
         for role in args.roles():
-            scheduled = self._compiles[role]
+            scheduled = self.step(_compile_step(role))
+            assert scheduled is not None
             result = _compile_result(storage, scheduled)
             if scheduled.job.get_status() is JobStatus.FAILED:
                 if result is None or result.meta.is_sandbox_error():
@@ -277,7 +281,7 @@ class ProblemTestingPipeline(AbstractPipeline):
                 self.fail(f"{ROLE_SPECS[role].label} compilation produced no program")
                 return NextJobStatus.FINISHED
             programs[role] = result.program_digest
-        self._programs = programs
+        self._programs_cache = programs
         return None
 
     # --- per-test children ----------------------------------------------
@@ -285,21 +289,20 @@ class ProblemTestingPipeline(AbstractPipeline):
     def _ensure_tests(
         self, storage: AbstractStorage, args: ProblemTestingArguments
     ) -> list[ScheduledPipeline]:
-        if self._tests is None:
-            assert self._programs is not None
-            self._tests = [
-                ScheduledPipeline(
-                    pipeline=ProblemTestPipeline(f"test-{index}"),
-                    input_digest=ProblemTestPipeline.make_input_digest(
+        if not self._children:
+            assert self._programs_cache is not None
+            for index, case in enumerate(args.tests):
+                self.add_child(
+                    f"test-{index}",
+                    ProblemTestPipeline(f"test-{index}"),
+                    ProblemTestPipeline.make_input_digest(
                         storage,
                         ProblemTestArguments.from_parent(
-                            args, case, programs=self._programs, index=index
+                            args, case, programs=self._programs_cache, index=index
                         ),
                     ),
                 )
-                for index, case in enumerate(args.tests)
-            ]
-        return self._tests
+        return self.children()
 
     def _child(self, scheduled: ScheduledPipeline) -> ProblemTestPipeline:
         pipeline = scheduled.pipeline
@@ -325,11 +328,15 @@ class ProblemTestingPipeline(AbstractPipeline):
     # --- results ---------------------------------------------------------
 
     def _compile_digests(self) -> dict[ProgramRole, str]:
-        return {
-            role: digest
-            for role, scheduled in self._compiles.items()
-            if (digest := scheduled.job.get_output_digest()) is not None
-        }
+        digests: dict[ProgramRole, str] = {}
+        for role in ROLE_ORDER:
+            scheduled = self.step(_compile_step(role))
+            if scheduled is None:
+                continue
+            digest = scheduled.job.get_output_digest()
+            if digest is not None:
+                digests[role] = digest
+        return digests
 
     def _complete_with(
         self,
@@ -346,10 +353,9 @@ class ProblemTestingPipeline(AbstractPipeline):
         )
 
     def _complete_overall(self, storage: AbstractStorage) -> NextJobStatus:
-        assert self._tests is not None
         test_results: list[ProblemTestResult] = []
         overall = Verdict.OK
-        for scheduled in self._tests:
+        for scheduled in self.children():
             result = self._child(scheduled).get_result(storage)
             if result is None:
                 self.fail(f"missing test result for {scheduled.pipeline.pipeline_id}")
