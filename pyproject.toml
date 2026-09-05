@@ -9,20 +9,34 @@ version = "0.0.1"
 description = "OlympDev: contest problem tooling"
 requires-python = ">=3.12"
 dependencies = [
-    "jinja2>=3.1.2,<4",
     "pydantic>=2.10,<3",
 ]
-
 license = "MIT"
 license-files = ["LICENSE"]
 
+# HTML views and the notebook facade. A worker needs neither, so jinja2 is not
+# a runtime dependency of the core package.
+[project.optional-dependencies]
+notebook = [
+    "jinja2>=3.1.2,<4",
+    "ipython>=8",
+]
+
+[project.scripts]
+olympdev = "olympdev.frontend.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["olympdev*"]
 
 [tool.setuptools.package-data]
-olympdev = ["assets/**/*", "frontend/html/templates/**/*"]
+olympdev = ["assets/**/*"]
+"olympdev.frontend.html" = ["templates/**/*"]
 
 [tool.pytest.ini_options]
+# Tests are plain functions; without this pytest tries to collect view models
+# whose names start with "Test" (TestRowView, TestingReportView).
+python_classes = []
 markers = [
     "slow: tests that run isolate or compile inside a sandbox",
 ]

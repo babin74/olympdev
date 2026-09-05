@@ -1,28 +1,45 @@
+"""Render view models as standalone HTML fragments.
+
+Templates take a view model and nothing else, and pull their styling from
+_base.css, so there is exactly one place where a verdict colour or a card
+border is defined.
+"""
+
+from __future__ import annotations
+
+from functools import cache
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
-from pydantic import Field
-
-from olympdev.schema import FrozenModel
-from olympdev.worker.job import JobStatus
+from olympdev.frontend.view import JobView, PipelineRunView, TestingReportView
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
-env = Environment(
-    loader=FileSystemLoader(_TEMPLATES),
-    autoescape=True,
-)
+
+#: Kept for callers that imported the old name.
+JobRenderContext = JobView
 
 
-class JobRenderContext(FrozenModel):
-    job_id: str
-    job_name: str
-    job_description: str
-    job_status: JobStatus
-    job_result: str
-    job_digests: list[tuple[str, str]]  # (name, digest)
-    job_labels: list[tuple[str, str]] = Field(default_factory=list)
+@cache
+def _environment():
+    try:
+        from jinja2 import Environment, FileSystemLoader
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on install
+        raise ModuleNotFoundError(
+            "HTML rendering needs jinja2: pip install 'olympdev[notebook]'"
+        ) from exc
+    return Environment(loader=FileSystemLoader(_TEMPLATES), autoescape=True)
 
 
-def render_job(context: JobRenderContext) -> str:
-    template = env.get_template("job.html")
-    return template.render(context=context)
+def _render(template_name: str, view: object) -> str:
+    return _environment().get_template(template_name).render(view=view)
+
+
+def render_job(view: JobView) -> str:
+    return _render("job.html", view)
+
+
+def render_pipeline_run(view: PipelineRunView) -> str:
+    return _render("pipeline_run.html", view)
+
+
+def render_testing_report(view: TestingReportView) -> str:
+    return _render("testing_report.html", view)

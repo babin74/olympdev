@@ -1,159 +1,43 @@
-{% set status = context.job_status.value %}
-<article class="od-job is-{{ status }}">
-    <style>
-        .od-job {
-            --od-fg: CanvasText;
-            --od-bg: Canvas;
-            --od-muted: color-mix(in srgb, CanvasText 58%, transparent);
-            --od-line: color-mix(in srgb, CanvasText 14%, transparent);
-            --od-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
-            color: var(--od-fg);
-            background: color-mix(in srgb, var(--od-bg) 90%, var(--od-fg) 5%);
-            border: 1px solid var(--od-line);
-            border-left-width: 4px;
-            border-radius: 12px;
-            padding: 14px 16px 10px;
-            margin: 8px 0 14px;
-            box-shadow: 0 1px 2px color-mix(in srgb, CanvasText 8%, transparent);
-        }
-        .od-job.is-completed { border-left-color: #22c55e; }
-        .od-job.is-failed { border-left-color: #ef4444; }
-        .od-job.is-running { border-left-color: #f59e0b; }
-        .od-job.is-pending { border-left-color: #94a3b8; }
-        .od-job-head {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-        }
-        .od-job-kicker {
-            margin: 0 0 2px;
-            font: 11px/1.3 var(--od-mono);
-            color: var(--od-muted);
-            letter-spacing: 0.02em;
-        }
-        .od-job h2 {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 650;
-            letter-spacing: -0.02em;
-        }
-        .od-job-badge {
-            flex: none;
-            display: inline-block;
-            padding: 3px 9px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 650;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }
-        .od-job.is-completed .od-job-badge { color: #166534; background: #dcfce7; }
-        .od-job.is-failed .od-job-badge { color: #991b1b; background: #fee2e2; }
-        .od-job.is-running .od-job-badge { color: #92400e; background: #fef3c7; }
-        .od-job.is-pending .od-job-badge { color: #334155; background: #e2e8f0; }
-        .od-job-desc {
-            margin: 8px 0 0;
-            color: var(--od-muted);
-        }
-        .od-job-labels {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin: 10px 0 0;
-            padding: 0;
-            list-style: none;
-        }
-        .od-job-labels li {
-            display: flex;
-            flex-direction: column;
-            gap: 1px;
-            min-width: 7rem;
-            padding: 6px 10px;
-            border: 1px solid var(--od-line);
-            border-radius: 8px;
-            background: color-mix(in srgb, var(--od-bg) 70%, transparent);
-        }
-        .od-job-label-key {
-            font-size: 10px;
-            font-weight: 650;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: var(--od-muted);
-        }
-        .od-job-label-value {
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .od-job table {
-            width: 100%;
-            margin: 12px 0 2px;
-            border-collapse: collapse;
-        }
-        .od-job th,
-        .od-job td {
-            padding: 6px 0;
-            text-align: left;
-            vertical-align: top;
-            border-top: 1px solid var(--od-line);
-        }
-        .od-job th {
-            width: 28%;
-            padding-right: 12px;
-            color: var(--od-muted);
-            font-weight: 500;
-            white-space: nowrap;
-        }
-        .od-job code {
-            font: 12px/1.4 var(--od-mono);
-            word-break: break-all;
-        }
-        .od-job-empty { color: var(--od-muted); }
-        .od-job-digests td:first-child {
-            font-family: var(--od-mono);
-            font-size: 12px;
-        }
-    </style>
-    <header class="od-job-head">
+{% set status = view.job_status.value %}
+<article class="od od-card is-{{ status }}">
+    {% include "_base.css" %}
+    <header class="od-head">
         <div>
-            <p class="od-job-kicker">{{ context.job_id }}</p>
-            <h2>{{ context.job_name }}</h2>
+            <p class="od-kicker">{{ view.job_id }}</p>
+            <h2>{{ view.job_name }}</h2>
         </div>
-        <span class="od-job-badge">{{ status }}</span>
+        <span class="od-badge is-{{ status }}">{{ status }}</span>
     </header>
-    {% if context.job_description %}
-    <p class="od-job-desc">{{ context.job_description }}</p>
+    {% if view.job_description %}
+    <p class="od-muted" style="margin:8px 0 0;font-size:13px">{{ view.job_description }}</p>
     {% endif %}
-    {% if context.job_labels %}
-    <ul class="od-job-labels">
-        {% for name, value in context.job_labels %}
+    {% if view.job_labels %}
+    <ul class="od-labels">
+        {% for name, value in view.job_labels %}
         <li>
-            <span class="od-job-label-key">{{ name }}</span>
-            <span class="od-job-label-value">{{ value }}</span>
+            <span class="od-label-key">{{ name }}</span>
+            <span class="od-label-value">{{ value }}</span>
         </li>
         {% endfor %}
     </ul>
     {% endif %}
-    <table>
+    <table class="od-rows">
         <tr>
             <th>Result</th>
             <td>
-                {% if context.job_result %}
-                <code title="{{ context.job_result }}">{{ context.job_result }}</code>
-                {% else %}
-                <span class="od-job-empty">—</span>
-                {% endif %}
+                {% if view.job_result %}
+                <code title="{{ view.job_result }}">{{ view.job_result }}</code>
+                {% else %}<span class="od-muted">—</span>{% endif %}
             </td>
         </tr>
-        {% if context.job_digests %}
+        {% if view.job_digests %}
         <tr>
             <th>Digests</th>
             <td>
-                <table class="od-job-digests">
-                    {% for name, digest in context.job_digests %}
+                <table>
+                    {% for name, digest in view.job_digests %}
                     <tr>
-                        <td>{{ name }}</td>
+                        <td class="od-test-name">{{ name }}</td>
                         <td><code title="{{ digest }}">{{ digest }}</code></td>
                     </tr>
                     {% endfor %}

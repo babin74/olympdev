@@ -1,0 +1,39 @@
+<section class="od">
+    {% include "_base.css" %}
+    {% if view.problem_name %}<h2 style="margin:0 0 8px">{{ view.problem_name }}</h2>{% endif %}
+    <div class="od-scroll">
+    <table class="od-grid">
+        <thead>
+            <tr>
+                <th>Test</th>
+                {% for column in view.columns %}
+                <th>
+                    <div class="od-strong">{{ column.name }}</div>
+                    {% if column.tag %}<div class="od-muted">{{ column.tag }}</div>{% endif %}
+                    <div class="od-strong od-v-{{ column.verdict_text }}">{{ column.verdict_text }}</div>
+                    <div class="od-muted">wall {{ column.wall_text }}</div>
+                </th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, cells in view.rows() %}
+            <tr>
+                <th class="od-test-name">{{ name }}</th>
+                {% for cell in cells %}
+                {% if cell %}
+                <td>
+                    <div class="od-strong od-v-{{ cell.verdict.value }}">{{ cell.verdict.value }}</div>
+                    <div class="od-muted">{{ cell.usage.elapsed_text }}</div>
+                    <div class="od-muted">{{ cell.usage.memory_text }}</div>
+                </td>
+                {% else %}<td class="od-muted">—</td>{% endif %}
+                {% endfor %}
+            </tr>
+            {% else %}
+            <tr><td class="od-muted" colspan="{{ view.columns | length + 1 }}">no tests</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</section>

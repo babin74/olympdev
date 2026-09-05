@@ -4,3 +4,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
+build/
+dist/
+# Generated per-machine by `olympdev compile-commands` (absolute host paths).
+compile_commands.json

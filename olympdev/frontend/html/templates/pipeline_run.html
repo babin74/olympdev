@@ -1,0 +1,41 @@
+{% set status = view.status.value %}
+<article class="od od-card is-{{ status }}">
+    {% include "_base.css" %}
+    <header class="od-head">
+        <div>
+            <p class="od-kicker">{{ view.pipeline_id }}</p>
+            <h2>{{ view.problem_name or "pipeline" }}</h2>
+        </div>
+        <span class="od-badge od-v-{{ view.verdict_text }}">{{ view.verdict_text }}</span>
+    </header>
+    <p class="od-muted" style="margin:8px 0 0">
+        {{ status }}{% if view.wall_seconds is not none %} · {{ view.wall_text }}{% endif %}
+    </p>
+    {% if view.failure_reason %}
+    <p class="od-v-WA" style="margin:8px 0 0">{{ view.failure_reason }}</p>
+    {% endif %}
+    {% if view.tests %}
+    <div class="od-scroll">
+    <table class="od-grid" style="margin-top:12px">
+        <thead>
+            <tr><th>Test</th><th>Verdict</th><th>Time</th><th>Memory</th></tr>
+        </thead>
+        <tbody>
+            {% for test in view.tests %}
+            <tr>
+                <td class="od-test-name">{{ test.name }}</td>
+                <td class="od-strong od-v-{{ test.verdict.value }}">{{ test.verdict.value }}</td>
+                <td>{{ test.usage.elapsed_text }}</td>
+                <td>{{ test.usage.memory_text }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+    {% if view.output_digest %}
+    <p class="od-muted" style="margin:10px 0 0">
+        result <code>{{ view.output_digest }}</code>
+    </p>
+    {% endif %}
+</article>
