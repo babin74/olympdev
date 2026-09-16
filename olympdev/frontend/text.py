@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from olympdev.frontend.view import PipelineRunView, VerificationReportView
+from olympdev.frontend.view import (
+    PipelineRunView,
+    StatementResultView,
+    StressResultView,
+    VerificationReportView,
+)
 
 
 def _table(rows: list[list[str]], *, header: list[str]) -> str:
@@ -42,6 +47,33 @@ def render_pipeline_run(view: PipelineRunView) -> str:
     return "\n".join(out)
 
 
+def render_statement_result(view: StatementResultView) -> str:
+    head = f"{view.problem_name or 'statement'} ({view.lang}): {view.status.value}"
+    if view.wall_seconds is not None:
+        head += f"  (wall {view.wall_seconds:.2f}s)"
+    out = [head]
+    if view.failure_reason:
+        out.append(f"  failed: {view.failure_reason}")
+    if view.pdf_digest is not None:
+        out.append(f"  pdf {view.pdf_digest}")
+    return "\n".join(out)
+
+
+def render_stress_result(view: StressResultView) -> str:
+    head = f"{view.problem_name or 'stress'}: "
+    head += f"found {view.verdict_text}" if view.found else "no counterexample"
+    if view.wall_seconds is not None:
+        head += f"  (wall {view.wall_seconds:.2f}s)"
+    out = [head, f"  {view.iterations_run} iteration(s) run"]
+    if view.failure_reason:
+        out.append(f"  failed: {view.failure_reason}")
+    if view.found:
+        out.append(f"  seed argv: {' '.join(view.seed_argv)}")
+        if view.input_digest:
+            out.append(f"  input {view.input_digest}")
+    return "\n".join(out)
+
+
 def render_verification_report(view: VerificationReportView) -> str:
     head = f"{view.problem_name or 'verify'}: {view.match_text}"
     if view.wall_seconds is not None:
@@ -68,4 +100,14 @@ def render_verification_report(view: VerificationReportView) -> str:
     for column in view.columns:
         if column.reason:
             out.append(f"  {column.tag}: {column.reason}")
+    for column in view.columns:
+        if not column.groups:
+            continue
+        out.append(f"  {column.tag}: {column.score_text}")
+        for group in column.groups:
+            mark = "OK" if group.passed else "--"
+            line = f"    [{mark}] group {group.group_id} {group.name}: {group.score_text}"
+            if group.tag_reason:
+                line += f"  ({group.tag_reason})"
+            out.append(line)
     return "\n".join(line for line in out if line)

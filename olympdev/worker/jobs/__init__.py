@@ -11,6 +11,7 @@ from olympdev.worker.jobs.simple_run import (
     SimpleRunJob,
     SolutionRunJob,
 )
+from olympdev.worker.jobs.statement_compile import StatementCompileJob
 from olympdev.worker.jobs.tool_run import CheckerJob, GeneratorJob, ToolRunJob, ValidatorJob
 
 from olympdev.worker.jobs.compile import COMPILE_JOB_CLASSES, compile_job_class
@@ -39,6 +40,7 @@ __all__ = [
     "SimpleRunJob",
     "SolutionCompileJob",
     "SolutionRunJob",
+    "StatementCompileJob",
     "ToolRunJob",
     "ValidatorCompileJob",
     "ValidatorJob",

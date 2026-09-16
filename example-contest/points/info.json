@@ -1,0 +1,35 @@
+{
+    "time_limit_ms": 1000,
+    "memory_limit_mb": 512,
+
+    "mode": "group-points",
+
+    "groups": [
+        {"id": 1, "points": 40, "name": "small", "depends_on": []},
+        {"id": 2, "points": 60, "name": "large", "depends_on": [1]}
+    ],
+
+    "solutions": [
+        {"file": "solutions/sol-ac.cpp", "tag": "main"},
+        {
+            "file": "solutions/sol-overflow.cpp",
+            "tag": "WA",
+            "group_tags": {"1": "OK", "2": "WA"}
+        }
+    ],
+
+    "sources": [
+        {"file": "source/ncmp.cpp", "type": "check"},
+        {"file": "source/valid.cpp", "type": "valid"},
+        {"file": "source/gen.cpp", "type": "gen"}
+    ],
+
+    "tests": [
+        {"input_file": "tests/g1-01.txt", "group_id": 1},
+        {"input_file": "tests/g2-01.txt", "group_id": 2}
+    ],
+
+    "statements": [
+        {"lang": "en", "engine": "latex", "source": "statement/en.tex", "title": "Points"}
+    ]
+}

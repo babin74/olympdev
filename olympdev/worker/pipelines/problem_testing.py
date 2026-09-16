@@ -5,8 +5,10 @@ from pydantic import model_validator
 
 from olympdev.problem.types import (
     ProblemConfiguration,
+    ProblemScoringMode,
     ProblemTest,
     parse_gen_argv,
+    parse_valid_argv,
     resolve_problem_file,
 )
 from olympdev.schema import FrozenModel, StorageModel
@@ -114,21 +116,42 @@ class CompileSpec(FrozenModel):
         return None
 
 
+def _resolve_valid_argv(test: ProblemTest, configuration: ProblemConfiguration) -> list[str]:
+    """Argv for the validator on this test - see ProblemTest.valid_cmd.
+
+    An explicit ``valid_cmd`` always wins outright. Otherwise, under
+    ``mode: "group-points"``, a test defaults to ``--group <group_id>`` (two
+    tokens) so it can enforce that group's constraints without every test
+    spelling it out - this is testlib's own built-in convention:
+    ``registerValidation(argc, argv)`` already parses ``--group <value>`` and
+    exposes it via ``validator.group()``, no custom argv parsing needed on
+    the validator's side.
+    """
+    if test.valid_cmd is not None:
+        return parse_valid_argv(test.valid_cmd)
+    if configuration.mode is ProblemScoringMode.GROUP_POINTS and test.group_id is not None:
+        return ["--group", str(test.group_id)]
+    return []
+
+
 def _store_test(
     storage: AbstractStorage,
     problem_dir: Path,
     test: ProblemTest,
+    configuration: ProblemConfiguration,
 ) -> ProblemTestingCase:
     output_digest = None
     if test.output_file is not None:
         output_digest = storage.upload_file(
             resolve_problem_file(problem_dir, test.output_file)
         )
+    valid_argv = _resolve_valid_argv(test, configuration)
     if test.gen_cmd is not None:
         return ProblemTestingCase(
             name=test.display_name(),
             output_digest=output_digest,
             gen_argv=parse_gen_argv(test.gen_cmd),
+            valid_argv=valid_argv,
         )
     assert test.input_file is not None
     return ProblemTestingCase(
@@ -137,6 +160,7 @@ def _store_test(
             resolve_problem_file(problem_dir, test.input_file)
         ),
         output_digest=output_digest,
+        valid_argv=valid_argv,
     )
 
 
@@ -184,7 +208,7 @@ class ProblemTestingPipeline(AbstractPipeline):
             problem_name=problem_name,
             binary_names=binary_names,
             tests=[
-                _store_test(storage, problem_dir, test)
+                _store_test(storage, problem_dir, test, configuration)
                 for test in [*configuration.samples, *configuration.tests]
             ],
         ).upload(storage)

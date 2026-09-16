@@ -12,12 +12,20 @@ import time
 from pathlib import Path
 from typing import Any, Self
 
-from olympdev.frontend.view import JobView, PipelineRunView, VerificationReportView
+from olympdev.frontend.view import (
+    JobView,
+    PipelineRunView,
+    StatementResultView,
+    StressResultView,
+    VerificationReportView,
+)
 from olympdev.isolate import IsolateFactory
 from olympdev.problem.build import (
+    build_problem_statement_input,
     build_problem_testing_input,
     build_problem_verification_input,
     build_solution_verification_input,
+    build_stress_input,
 )
 from olympdev.problem.package import Contest, ProblemPackage, load_target
 from olympdev.settings import Settings, get_settings
@@ -27,7 +35,9 @@ from olympdev.worker.executor import JobExecutor
 from olympdev.worker.observer import NullObserver
 from olympdev.worker.pipeline import PipelineContext, run_pipeline
 from olympdev.worker.pipelines.problem_testing import ProblemTestingPipeline
+from olympdev.worker.pipelines.stress import StressPipeline
 from olympdev.worker.pipelines.problem_verification import ProblemVerificationPipeline
+from olympdev.worker.pipelines.statement import StatementPipeline
 from olympdev.worker.runner import run_pipeline_parallel
 
 
@@ -142,7 +152,8 @@ class ProblemWorkbench:
                 settings=self.workbench.settings,
             )
             ident = "verify"
-            names = {s.tag: s.name for s in self.package.verifiable_solutions()}
+            solutions_list = self.package.verifiable_solutions()
+            names = {s.tag: s.name for s in solutions_list}
         else:
             resolved = self._resolve(solution)
             digest = build_solution_verification_input(
@@ -154,6 +165,7 @@ class ProblemWorkbench:
             ident = solution if isinstance(solution, str) else getattr(
                 solution, "name", "verify"
             )
+            solutions_list = [resolved] if hasattr(resolved, "tag") else []
             names = (
                 {resolved.tag: resolved.name} if hasattr(resolved, "tag") else {}
             )
@@ -183,6 +195,106 @@ class ProblemWorkbench:
             wall_seconds=time.perf_counter() - started,
             jobs=observer.jobs,
             solution_names=names,
+            configuration=self.package.configuration,
+            solutions=solutions_list,
+        )
+
+    def statement(
+        self,
+        lang: str,
+        *,
+        trace: bool = False,
+        jobs: int | None = None,
+        cache: AbstractCacheStorage | None = None,
+        pipeline_id: str | None = None,
+    ) -> StatementResultView:
+        """Compile this problem's statement in ``lang`` into a PDF."""
+        observer = NotebookObserver(live=trace)
+        digest = build_problem_statement_input(
+            self.workbench.storage,
+            self.package,
+            lang=lang,
+            settings=self.workbench.settings,
+        )
+        pipeline = StatementPipeline(pipeline_id or f"{self.name}-statement-{lang}")
+        context = PipelineContext(
+            input_digest=digest,
+            storage=self.workbench.storage,
+            isolate_factory=self.workbench.isolate_factory,
+        )
+        executor = JobExecutor(cache if cache is not None else self.workbench.cache)
+        workers = jobs if jobs is not None else self.workbench.jobs
+        started = time.perf_counter()
+        if workers > 1:
+            run_pipeline_parallel(
+                pipeline,
+                context,
+                executor=executor,
+                observer=observer,
+                max_workers=workers,
+            )
+        else:
+            run_pipeline(pipeline, context, executor=executor, observer=observer)
+        return StatementResultView.from_pipeline(
+            pipeline,
+            problem_name=self.name,
+            lang=lang,
+            wall_seconds=time.perf_counter() - started,
+            jobs=observer.jobs,
+        )
+
+    def stress(
+        self,
+        candidate: str,
+        *,
+        against: str = "model",
+        group: int | None = None,
+        gen_args: str | None = None,
+        iterations: int = 1000,
+        trace: bool = False,
+        jobs: int | None = None,
+        cache: AbstractCacheStorage | None = None,
+        pipeline_id: str | None = None,
+    ) -> StressResultView:
+        """Run ``candidate`` against ``against`` (default: the main solution)
+        on growing-seed generated inputs until they disagree or the
+        iteration budget runs out."""
+        observer = NotebookObserver(live=trace)
+        digest = build_stress_input(
+            self.workbench.storage,
+            self.package,
+            candidate=candidate,
+            against=against,
+            group=group,
+            gen_args=gen_args,
+            max_iterations=iterations,
+            settings=self.workbench.settings,
+        )
+        pipeline = StressPipeline(pipeline_id or f"{self.name}-stress-{candidate}")
+        context = PipelineContext(
+            input_digest=digest,
+            storage=self.workbench.storage,
+            isolate_factory=self.workbench.isolate_factory,
+        )
+        executor = JobExecutor(cache if cache is not None else self.workbench.cache)
+        workers = jobs if jobs is not None else self.workbench.jobs
+        started = time.perf_counter()
+        if workers > 1:
+            run_pipeline_parallel(
+                pipeline,
+                context,
+                executor=executor,
+                observer=observer,
+                max_workers=workers,
+            )
+        else:
+            run_pipeline(pipeline, context, executor=executor, observer=observer)
+        return StressResultView.from_pipeline(
+            pipeline,
+            self.workbench.storage,
+            problem_name=self.name,
+            wall_seconds=time.perf_counter() - started,
+            jobs=observer.jobs,
         )
 
 

@@ -51,3 +51,7 @@ flags = ["-O2"]
 
 [toolchains.c]
 flags = ["-O2"]
+
+[statement_toolchains.latex]
+# command = "latexmk"                    # default: latexmk on PATH
+args = ["-pdf", "-interaction=nonstopmode", "-halt-on-error"]

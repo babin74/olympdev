@@ -14,6 +14,7 @@ import pytest
 from olympdev.frontend import text as text_view
 from olympdev.frontend.cli.main import main
 from olympdev.frontend.view import (
+    GroupScoreView,
     JobView,
     PipelineRunView,
     SolutionColumnView,
@@ -59,6 +60,68 @@ def _verification_report() -> VerificationReportView:
         test_names=["sample-01.txt"],
         columns=[column, mismatch],
     )
+
+
+def _verification_report_with_groups() -> VerificationReportView:
+    column = SolutionColumnView(
+        name="sol-overflow",
+        tag="WA",
+        verdict=Verdict.WA,
+        matched=False,
+        reason="group 2 (tests/g2-01.txt): unexpected verdict WA",
+        total_points=40,
+        max_points=100,
+        groups=[
+            GroupScoreView(
+                group_id=1, name="small", max_points=40, points_earned=40, passed=True
+            ),
+            GroupScoreView(
+                group_id=2,
+                name="large",
+                max_points=60,
+                points_earned=0,
+                passed=False,
+                failing_tests=["tests/g2-01.txt"],
+                tag_checked=True,
+                tag_reason="group 2 (tests/g2-01.txt): unexpected verdict WA",
+            ),
+        ],
+    )
+    return VerificationReportView(
+        matched=False,
+        status=PipelineStatus.COMPLETED,
+        problem_name="points",
+        test_names=[],
+        columns=[column],
+    )
+
+
+def test_text_verification_report_shows_group_scores():
+    rendered = text_view.render_verification_report(_verification_report_with_groups())
+    assert "WA: 40/100" in rendered
+    assert "[OK] group 1 small: 40/40" in rendered
+    assert "[--] group 2 large: 0/60" in rendered
+    assert "unexpected verdict WA" in rendered
+
+
+def test_html_verification_report_includes_group_scores():
+    from olympdev.frontend import html as html_view
+
+    markup = html_view.render_verification_report(_verification_report_with_groups())
+    assert '<div class="od-subgrid">' in markup
+    assert "40/40" in markup
+    assert "0/60" in markup
+    assert "small" in markup and "large" in markup
+
+
+def test_ungrouped_report_renders_no_group_markup():
+    """No groups on any column -> no group section at all (byte-identical invariant)."""
+    from olympdev.frontend import html as html_view
+
+    rendered = text_view.render_verification_report(_verification_report())
+    assert "group" not in rendered
+    markup = html_view.render_verification_report(_verification_report())
+    assert '<div class="od-subgrid">' not in markup
 
 
 @pytest.mark.parametrize(

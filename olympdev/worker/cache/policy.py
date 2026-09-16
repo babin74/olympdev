@@ -15,3 +15,5 @@ class CachePolicy(Enum):
     Generator = "generator"
     Validator = "validator"
     Checker = "checker"
+
+    StatementCompile = "statement_compile"

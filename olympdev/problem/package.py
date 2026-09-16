@@ -13,10 +13,13 @@ from pathlib import Path
 from typing import Any, Self
 
 from olympdev.problem.types import (
+    ContestStatementConfig,
     ProblemConfiguration,
     ProblemSolution,
     ProblemSource,
     ProblemSourceType,
+    StatementSpec,
+    resolve_problem_dir,
     resolve_problem_file,
 )
 from olympdev.worker.roles import ProgramRole
@@ -68,6 +71,22 @@ class ProblemPackage:
     def file(self, relative: str) -> Path:
         """Resolve a path inside the problem, rejecting escapes and symlinks."""
         return resolve_problem_file(self.directory, relative)
+
+    def asset_dir(self, relative: str) -> Path:
+        """Resolve a directory inside the problem, rejecting escapes and symlinks."""
+        return resolve_problem_dir(self.directory, relative)
+
+    def statement_spec(self, lang: str) -> StatementSpec:
+        """Look up a statement by language - the only way to address one."""
+        spec = self.configuration.statement_by_lang(lang)
+        if spec is None:
+            available = ", ".join(
+                sorted(item.lang for item in self.configuration.statements)
+            ) or "none"
+            raise KeyError(
+                f"no statement for lang {lang!r} in {self.name} (have: {available})"
+            )
+        return spec
 
     def source(self, source_type: ProblemSourceType) -> ProblemSource | None:
         return self.configuration.source(source_type)
@@ -141,9 +160,15 @@ class ProblemPackage:
 class Contest:
     """A contest directory: olympdev.json listing problem subdirectories."""
 
-    def __init__(self, directory: Path, problems: dict[str, ProblemPackage]):
+    def __init__(
+        self,
+        directory: Path,
+        problems: dict[str, ProblemPackage],
+        statement: ContestStatementConfig | None = None,
+    ):
         self.directory = directory
         self.problems = problems
+        self.statement = statement
 
     @classmethod
     def load(cls, path: Path | str) -> Self:
@@ -159,7 +184,13 @@ class Contest:
             if not isinstance(name, str) or not name or "/" in name or name == "..":
                 raise ValueError(f"invalid problem name in {config_path}: {name!r}")
             problems[name] = ProblemPackage.load(directory / name)
-        return cls(directory, problems)
+        statement_data = data.get("statement")
+        statement = (
+            ContestStatementConfig.model_validate(statement_data)
+            if statement_data is not None
+            else None
+        )
+        return cls(directory, problems, statement)
 
     def problem(self, name: str) -> ProblemPackage:
         try:
@@ -167,6 +198,14 @@ class Contest:
         except KeyError:
             available = ", ".join(sorted(self.problems))
             raise KeyError(f"no problem {name!r} (have: {available})") from None
+
+    def file(self, relative: str) -> Path:
+        """Resolve a path inside the contest, rejecting escapes and symlinks."""
+        return resolve_problem_file(self.directory, relative)
+
+    def asset_dir(self, relative: str) -> Path:
+        """Resolve a directory inside the contest, rejecting escapes and symlinks."""
+        return resolve_problem_dir(self.directory, relative)
 
 
 def load_target(path: Path | str) -> Contest:

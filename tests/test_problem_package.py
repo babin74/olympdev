@@ -33,7 +33,7 @@ def test_example_info_json_loads_as_written(contest_dir: Path):
 
 def test_contest_lists_its_problems(contest_dir: Path):
     contest = Contest.load(contest_dir)
-    assert list(contest.problems) == ["aplusb"]
+    assert list(contest.problems) == ["aplusb", "points"]
     assert contest.problem("aplusb").name == "aplusb"
     with pytest.raises(KeyError, match="no problem 'nope'"):
         contest.problem("nope")

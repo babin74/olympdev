@@ -56,6 +56,17 @@ it. `worker/pipelines/*` may import `problem.types` (plain models); nothing in
    partway, `save_state()` → storage → `restore()`, finish, and assert no job
    was issued twice. This is what actually catches hidden state.
 
+**Open-ended child count** (see `worker/pipelines/stress.py`): a pipeline
+whose number of children isn't known at `make_input_digest` time — because it
+depends on when, or whether, something happens at runtime — should derive
+"how many issued so far" from `len(self._children)` alone, add at most one
+new child per `_next_job` call, and address a child by its exact computed key
+rather than list position. Name numeric children zero-padded
+(`iter-00000007`, not `iter-7`): `PipelineState` round-trips through storage
+as `sort_keys=True` JSON (`olympdev/storage/abstract.py`), so an unpadded
+`"iter-9"` sorts after `"iter-10"` and silently reorders the child dict on
+restore once there are 10 or more.
+
 ### Adding a program role
 
 Add one entry to `ROLE_SPECS` in [`worker/roles.py`](olympdev/worker/roles.py)

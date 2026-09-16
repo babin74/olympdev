@@ -1,0 +1,30 @@
+{% set status = view.status.value %}
+<article class="od od-card is-{{ status }}">
+    {% include "_base.css" %}
+    <header class="od-head">
+        <div>
+            <p class="od-kicker">stress</p>
+            <h2>{{ view.problem_name or "stress" }}</h2>
+        </div>
+        <span class="od-badge od-v-{{ view.verdict_text }}">
+            {{ "found " ~ view.verdict_text if view.found else "no counterexample" }}
+        </span>
+    </header>
+    <p class="od-muted" style="margin:8px 0 0">
+        {{ status }} · {{ view.iterations_run }} iteration(s)
+        {% if view.wall_seconds is not none %} · wall {{ "%.2f"|format(view.wall_seconds) }}s{% endif %}
+    </p>
+    {% if view.failure_reason %}
+    <p class="od-v-WA" style="margin:8px 0 0">{{ view.failure_reason }}</p>
+    {% endif %}
+    {% if view.found %}
+    <p class="od-muted" style="margin:10px 0 0">
+        seed argv <code>{{ view.seed_argv | join(" ") }}</code>
+    </p>
+    {% if view.input_digest %}
+    <p class="od-muted" style="margin:4px 0 0">
+        input <code>{{ view.input_digest }}</code>
+    </p>
+    {% endif %}
+    {% endif %}
+</article>

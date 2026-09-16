@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Self
 
 from olympdev.isolate import IsolateMeta
+from olympdev.problem.scoring import check_solution_group_tags, score_solution
+from olympdev.problem.types import ProblemConfiguration, ProblemScoringMode, ProblemSolution
 from olympdev.schema import FrozenModel
 from olympdev.storage import AbstractStorage
 from olympdev.worker.job import AbstractJob, JobStatus
@@ -21,6 +23,7 @@ from olympdev.worker.pipeline import AbstractPipeline, PipelineStatus
 from olympdev.worker.pipelines.problem_test import ProblemTestResult
 from olympdev.worker.pipelines.problem_testing import ProblemTestingResult
 from olympdev.worker.pipelines.problem_verification import ProblemVerificationResult
+from olympdev.worker.pipelines.stress import StressResult
 from olympdev.worker.verdict import Verdict
 
 if TYPE_CHECKING:
@@ -132,10 +135,17 @@ class TestRowView(FrozenModel):
     usage: UsageView = EMPTY_USAGE
     run_digest: str | None = None
     check_digest: str | None = None
+    #: Which group this test scores into, when the problem uses group-points.
+    #: None for an ungrouped problem, or when no configuration was given.
+    group_id: int | None = None
 
     @classmethod
     def from_result(
-        cls, storage: AbstractStorage, result: ProblemTestResult
+        cls,
+        storage: AbstractStorage,
+        result: ProblemTestResult,
+        *,
+        group_id: int | None = None,
     ) -> Self:
         return cls(
             name=result.name,
@@ -143,6 +153,7 @@ class TestRowView(FrozenModel):
             usage=_run_usage(storage, result.run_digest),
             run_digest=result.run_digest,
             check_digest=result.check_digest,
+            group_id=group_id,
         )
 
 
@@ -253,6 +264,25 @@ def _testing_result(
     return ProblemTestingResult.from_storage(storage, digest)
 
 
+class GroupScoreView(FrozenModel):
+    """One group's score for one solution, when the problem uses group-points."""
+
+    group_id: int
+    name: str
+    max_points: int
+    points_earned: int
+    passed: bool
+    failing_tests: list[str] = []
+    #: Whether this solution declared ``group_tags`` (so this group's verdicts
+    #: were checked against a claim); False means score-only, never checked.
+    tag_checked: bool = False
+    tag_reason: str | None = None
+
+    @property
+    def score_text(self) -> str:
+        return f"{self.points_earned}/{self.max_points}"
+
+
 class SolutionColumnView(FrozenModel):
     """One solution's results, as a column of the comparison matrix."""
 
@@ -262,6 +292,11 @@ class SolutionColumnView(FrozenModel):
     matched: bool | None = None
     reason: str | None = None
     tests: list[TestRowView] = []
+    #: Populated only when the problem uses group-points and a configuration
+    #: was supplied to ``VerificationReportView.from_pipeline``.
+    groups: list[GroupScoreView] = []
+    total_points: int | None = None
+    max_points: int | None = None
 
     @property
     def verdict_text(self) -> str:
@@ -272,6 +307,12 @@ class SolutionColumnView(FrozenModel):
         if self.matched is None:
             return "—"
         return "match" if self.matched else "mismatch"
+
+    @property
+    def score_text(self) -> str:
+        if self.total_points is None:
+            return "—"
+        return f"{self.total_points}/{self.max_points}"
 
     @property
     def peak_cpu_ms(self) -> float | None:
@@ -312,35 +353,109 @@ class VerificationReportView(FrozenModel):
         wall_seconds: float | None = None,
         jobs: list[JobView] | None = None,
         solution_names: dict[str, str] | None = None,
+        configuration: ProblemConfiguration | None = None,
+        solutions: list[ProblemSolution] | None = None,
     ) -> Self:
         """``solution_names`` maps a solution's tag to its display name.
 
         The pipeline only ever sees tags - the file a tag came from is a
         submitter-side fact, so the caller (which holds the ``ProblemPackage``)
         supplies it. Falls back to the tag itself when not given.
+
+        ``configuration``/``solutions`` are optional and additive: when
+        ``configuration`` is omitted (every caller before group-points scoring
+        existed), the report is unchanged. When given and the problem's
+        ``mode`` is ``"group-points"``, each column also gets a per-group
+        score (see :mod:`olympdev.problem.scoring`) computed here, on the
+        submitter side - the worker-side pipeline never sees a
+        ``ProblemConfiguration``.
         """
         result = _verification_result(pipeline, storage)
+        solution_by_tag = {item.tag: item for item in (solutions or [])}
+        group_id_by_test_name = _group_id_by_test_name(configuration)
         columns: list[SolutionColumnView] = []
         if result is not None:
-            for solution in result.solutions:
+            for spec in result.solutions:
                 testing = ProblemTestingResult.from_storage(
-                    storage, solution.testing_digest
+                    storage, spec.testing_digest
                 )
+                tests = (
+                    []
+                    if testing is None
+                    else [
+                        TestRowView.from_result(
+                            storage, test, group_id=group_id_by_test_name.get(test.name)
+                        )
+                        for test in testing.tests
+                    ]
+                )
+                matched = spec.matched
+                reason = spec.reason
+                groups: list[GroupScoreView] = []
+                total_points: int | None = None
+                max_points: int | None = None
+                if (
+                    testing is not None
+                    and configuration is not None
+                    and configuration.mode is ProblemScoringMode.GROUP_POINTS
+                ):
+                    verdicts = {test.name: test.verdict for test in testing.tests}
+                    score = score_solution(configuration, verdicts)
+                    total_points = score.total_points
+                    max_points = score.max_points
+                    matched_solution = solution_by_tag.get(spec.tag)
+                    tag_checked = (
+                        matched_solution is not None
+                        and matched_solution.group_tags is not None
+                    )
+                    tag_reasons = (
+                        check_solution_group_tags(configuration, matched_solution, verdicts)
+                        if tag_checked
+                        else {}
+                    )
+                    for group_score in score.groups:
+                        tag_reason = tag_reasons.get(group_score.group.id)
+                        if tag_reason is not None:
+                            location = (
+                                f" ({group_score.failing_tests[0]})"
+                                if group_score.failing_tests
+                                else ""
+                            )
+                            named_reason = (
+                                f"group {group_score.group.id}{location}: {tag_reason}"
+                            )
+                            reason = _merge_reason(reason, named_reason)
+                            matched = False
+                        groups.append(
+                            GroupScoreView(
+                                group_id=group_score.group.id,
+                                name=group_score.group.name,
+                                max_points=group_score.group.points,
+                                points_earned=group_score.points_earned,
+                                passed=group_score.passed,
+                                failing_tests=group_score.failing_tests,
+                                tag_checked=tag_checked,
+                                tag_reason=tag_reasons.get(group_score.group.id),
+                            )
+                        )
+                    if spec.tag in ("main", "OK") and total_points < max_points:
+                        matched = False
+                        reason = _merge_reason(
+                            reason,
+                            f"scored {total_points}/{max_points}, "
+                            f"expected {max_points}/{max_points}",
+                        )
                 columns.append(
                     SolutionColumnView(
-                        name=(solution_names or {}).get(solution.tag, solution.tag),
-                        tag=solution.tag,
+                        name=(solution_names or {}).get(spec.tag, spec.tag),
+                        tag=spec.tag,
                         verdict=None if testing is None else testing.verdict,
-                        matched=solution.matched,
-                        reason=solution.reason,
-                        tests=(
-                            []
-                            if testing is None
-                            else [
-                                TestRowView.from_result(storage, test)
-                                for test in testing.tests
-                            ]
-                        ),
+                        matched=matched,
+                        reason=reason,
+                        tests=tests,
+                        groups=groups,
+                        total_points=total_points,
+                        max_points=max_points,
                     )
                 )
         test_names: list[str] = []
@@ -376,6 +491,126 @@ class VerificationReportView(FrozenModel):
         from olympdev.frontend.html import render_verification_report
 
         return render_verification_report(self)
+
+
+def _group_id_by_test_name(configuration: ProblemConfiguration | None) -> dict[str, int | None]:
+    if configuration is None:
+        return {}
+    return {
+        test.display_name(): test.group_id
+        for test in (*configuration.samples, *configuration.tests)
+    }
+
+
+def _merge_reason(existing: str | None, addition: str) -> str:
+    return addition if existing is None else f"{existing}; {addition}"
+
+
+class StatementResultView(FrozenModel):
+    """One statement build: its outcome and the PDF's digest.
+
+    Unlike ``PipelineRunView``, there is no per-test result to unpack from
+    storage - ``StatementPipeline.complete()`` already makes the pipeline's
+    own output digest the compiled PDF's digest.
+    """
+
+    status: PipelineStatus
+    problem_name: str | None = None
+    lang: str | None = None
+    failure_reason: str | None = None
+    wall_seconds: float | None = None
+    pdf_digest: str | None = None
+    jobs: list[JobView] = []
+
+    @classmethod
+    def from_pipeline(
+        cls,
+        pipeline: AbstractPipeline,
+        *,
+        problem_name: str | None = None,
+        lang: str | None = None,
+        wall_seconds: float | None = None,
+        jobs: list[JobView] | None = None,
+    ) -> Self:
+        return cls(
+            status=pipeline.get_status(),
+            problem_name=problem_name,
+            lang=lang,
+            failure_reason=(
+                None
+                if pipeline.get_failure_reason() is None
+                else str(pipeline.get_failure_reason())
+            ),
+            wall_seconds=wall_seconds,
+            pdf_digest=pipeline.get_output_digest(),
+            jobs=jobs or [],
+        )
+
+    def _repr_html_(self) -> str:
+        from olympdev.frontend.html import render_statement_result
+
+        return render_statement_result(self)
+
+
+class StressResultView(FrozenModel):
+    """One stress run: whether a counterexample turned up, and where."""
+
+    status: PipelineStatus
+    problem_name: str | None = None
+    failure_reason: str | None = None
+    wall_seconds: float | None = None
+    found: bool = False
+    iterations_run: int = 0
+    seed_argv: list[str] = []
+    verdict: Verdict | None = None
+    input_digest: str | None = None
+    candidate_run_digest: str | None = None
+    reference_run_digest: str | None = None
+    check_digest: str | None = None
+    jobs: list[JobView] = []
+
+    @classmethod
+    def from_pipeline(
+        cls,
+        pipeline: AbstractPipeline,
+        storage: AbstractStorage,
+        *,
+        problem_name: str | None = None,
+        wall_seconds: float | None = None,
+        jobs: list[JobView] | None = None,
+    ) -> Self:
+        digest = pipeline.get_output_digest()
+        result = StressResult.from_storage(storage, digest) if digest is not None else None
+        return cls(
+            status=pipeline.get_status(),
+            problem_name=problem_name,
+            failure_reason=(
+                None
+                if pipeline.get_failure_reason() is None
+                else str(pipeline.get_failure_reason())
+            ),
+            wall_seconds=wall_seconds,
+            found=False if result is None else result.found,
+            iterations_run=0 if result is None else result.iterations_run,
+            seed_argv=(
+                [] if result is None or result.seed_argv is None else result.seed_argv
+            ),
+            verdict=None if result is None else result.verdict,
+            input_digest=None if result is None else result.input_digest,
+            candidate_run_digest=None if result is None else result.candidate_run_digest,
+            reference_run_digest=None if result is None else result.reference_run_digest,
+            check_digest=None if result is None else result.check_digest,
+            jobs=jobs or [],
+        )
+
+    @property
+    def verdict_text(self) -> str:
+        return "—" if self.verdict is None else self.verdict.value
+
+    def _repr_html_(self) -> str:
+        from olympdev.frontend.html import render_stress_result
+
+        return render_stress_result(self)
 
 
 def _verification_result(

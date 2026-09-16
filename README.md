@@ -170,7 +170,9 @@ p.verify()                     # все решения сверяются с т�
 | Команда | Что делает |
 |---|---|
 | `olympdev run <target> [--solution NAME] [--jobs N]` | прогон задачи или контеста |
-| `olympdev verify <target> [--solution NAME]` | сверка решений с тегами, матрица тест × решение |
+| `olympdev verify <target> [--solution NAME]` | сверка решений с тегами, матрица тест × решение (при `mode: "group-points"` — ещё и баллы по группам) |
+| `olympdev statement <target> --lang ru [--out FILE]` | компиляция условия задачи в PDF |
+| `olympdev stress <target> --candidate NAME (--group N \| --gen-args ARGV)` | решение против эталона на растущих сидах, до первого расхождения |
 | `olympdev compile-commands <target>` | compilation database для clangd/IDE |
 | `olympdev show <digest>` | содержимое блоба из хранилища |
 | `olympdev config` | действующие настройки и их источник |
@@ -235,7 +237,6 @@ TL/ML) через тот же пайплайн, что и обычное реш�
 
 ## Пока нет
 
-- Генерация условий (в пакете есть `olymp.sty`, пайплайна нет)
 - Постоянный кеш job'ов на диске
 - Удалённый бэкенд хранилища (интерфейс готов, реализации HTTP/S3 нет)
 - Веб-сервер и UI

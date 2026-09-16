@@ -26,6 +26,11 @@
         {"gen_cmd": "gen -c=1e9", "name": "random-03.txt"}
     ],
 
+    "statements": [
+        {"lang": "en", "engine": "latex", "source": "statement/en.tex", "title": "A+B Problem"},
+        {"lang": "ru", "engine": "latex", "source": "statement/ru.tex", "title": "Сумма двух чисел"}
+    ],
+
     "dev": {
         "compile_options_path": "../../compile_commands.json"     
     }

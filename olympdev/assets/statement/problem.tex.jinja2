@@ -1,0 +1,21 @@
+\begin{problem}{\VAR{title}}
+{}{}
+{\VAR{time_limit}}{\VAR{memory_limit}}{}
+
+\VAR{body}
+
+\BLOCK{if subtasks_tex}
+\Constraints
+\VAR{subtasks_tex}
+\BLOCK{endif}
+
+\BLOCK{if samples}
+\Examples
+\begin{example}
+\BLOCK{for sample in samples}
+\exmpfile{\VAR{sample.stem}.in}{\VAR{sample.stem}.out}
+\BLOCK{endfor}
+\end{example}
+\BLOCK{endif}
+
+\end{problem}

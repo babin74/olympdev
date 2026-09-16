@@ -25,6 +25,18 @@
                     </div>
                     <div class="od-muted">cpu/wall {{ column.time_text }}</div>
                     {% if column.reason %}<div class="od-muted">{{ column.reason }}</div>{% endif %}
+                    {% if column.groups %}
+                    <div class="od-subgrid">
+                        <div class="od-strong">{{ column.score_text }}</div>
+                        {% for group in column.groups %}
+                        <div class="od-subgrid-row">
+                            <span class="od-badge od-v-{{ 'OK' if group.passed else 'WA' }}">{{ group.score_text }}</span>
+                            <span>{{ group.name or ("group " ~ group.group_id) }}</span>
+                            {% if group.tag_reason %}<span class="od-muted">{{ group.tag_reason }}</span>{% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </th>
                 {% endfor %}
             </tr>

@@ -1,0 +1,22 @@
+{% set status = view.status.value %}
+<article class="od od-card is-{{ status }}">
+    {% include "_base.css" %}
+    <header class="od-head">
+        <div>
+            <p class="od-kicker">statement</p>
+            <h2>{{ view.problem_name or "statement" }}{% if view.lang %} ({{ view.lang }}){% endif %}</h2>
+        </div>
+        <span class="od-badge is-{{ status }}">{{ status }}</span>
+    </header>
+    <p class="od-muted" style="margin:8px 0 0">
+        {{ status }}{% if view.wall_seconds is not none %} · wall {{ "%.2f"|format(view.wall_seconds) }}s{% endif %}
+    </p>
+    {% if view.failure_reason %}
+    <p class="od-v-WA" style="margin:8px 0 0">{{ view.failure_reason }}</p>
+    {% endif %}
+    {% if view.pdf_digest %}
+    <p class="od-muted" style="margin:10px 0 0">
+        pdf <code>{{ view.pdf_digest }}</code>
+    </p>
+    {% endif %}
+</article>

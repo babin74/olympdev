@@ -115,6 +115,9 @@ class ProblemTestingCase(FrozenModel):
     input_digest: str | None = None
     output_digest: str | None = None
     gen_argv: list[str] | None = None
+    #: Extra argv for the validator, e.g. ``["--group", "1"]``. Empty, not
+    #: optional - there is no "exactly one of" invariant like gen_argv's.
+    valid_argv: list[str] = []
 
     @model_validator(mode="after")
     def _input_or_gen(self) -> Self:
@@ -130,6 +133,7 @@ class ProblemTestArguments(TestingContext, StorageModel):
     #: Compiled binary of each role that this problem uses.
     programs: dict[ProgramRole, str]
     gen_argv: list[str] | None = None
+    valid_argv: list[str] = []
     index: int = 0
 
     def program(self, role: ProgramRole) -> str | None:
@@ -166,6 +170,7 @@ class ProblemTestArguments(TestingContext, StorageModel):
             output_digest=case.output_digest,
             programs=programs,
             gen_argv=case.gen_argv,
+            valid_argv=case.valid_argv,
             index=index,
             **parent.testing_kwargs(),
         )
@@ -225,6 +230,26 @@ class ProblemTestPipeline(AbstractPipeline):
         if digest is None:
             return None
         return ProblemTestResult.from_storage(storage, digest)
+
+    def generated_input_digest(self, storage: AbstractStorage) -> str | None:
+        """The generator's stdout digest (the actual test input), when this
+        test's input came from a generator rather than a static file - see
+        ``StressPipeline``, which needs the input that produced a mismatch."""
+        step = self.step(self.GEN)
+        if step is None:
+            return None
+        digest = step.job.get_output_digest()
+        if digest is None:
+            return None
+        result = ToolRunJobResult.from_storage(storage, digest)
+        return None if result is None else result.stdout_digest
+
+    def model_run_digest(self) -> str | None:
+        """The MODEL step's own job output digest, when one was run - see
+        ``StressPipeline``, which uses this test's MODEL role as the
+        reference solution."""
+        step = self.step(self.MODEL)
+        return None if step is None else step.job.get_output_digest()
 
     def run_not_started(self) -> bool:
         return not self.has_step(self.RUN)
@@ -397,6 +422,7 @@ class ProblemTestPipeline(AbstractPipeline):
                 storage,
                 program_digest=validator_digest,
                 stdin_digest=input_digest,
+                command=args.valid_argv,
             ),
             job_id=f"valid-{args.index}",
             labels=args.labels(ProgramRole.VALIDATOR, args.name),

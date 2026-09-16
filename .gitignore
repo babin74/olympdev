@@ -8,3 +8,5 @@ build/
 dist/
 # Generated per-machine by `olympdev compile-commands` (absolute host paths).
 compile_commands.json
+# Written by notebooks/*.ipynb's save_pdf() when a run compiles a statement.
+notebooks/output/

@@ -120,4 +120,18 @@
   .od-strong { font-weight: 700; }
   .od-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
   .od-head-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+  .od-subgrid {
+    margin-top: 6px;
+    border-top: 1px solid var(--od-line);
+    padding-top: 6px;
+    text-align: left;
+    font-weight: normal;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .od-subgrid-row {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px;
+    font-size: 11px; margin: 2px 0;
+  }
 </style>

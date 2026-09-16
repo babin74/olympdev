@@ -191,12 +191,56 @@ DEFAULT_TOOLCHAINS: dict[Language, ToolchainSettings] = {
 }
 
 
+class StatementEngine(StrEnum):
+    """Which typesetting system a statement is written for.
+
+    Only LaTeX is implemented today; a problem's ``engine`` field and this
+    settings machinery are already shaped so a ``TYPST`` member is additive -
+    no pipeline or job changes needed to add it later.
+    """
+
+    LATEX = "latex"
+
+
+_DEFAULT_STATEMENT_COMMANDS: dict[StatementEngine, str] = {
+    StatementEngine.LATEX: "latexmk",
+}
+
+
+class StatementToolchainSettings(_Frozen):
+    """How to compile one statement engine's source into a PDF.
+
+    ``command`` is resolved through PATH when it is not an absolute path,
+    same as ``ToolchainSettings.compiler``.
+    """
+
+    command: str | None = None
+    args: list[str] = ["-pdf", "-interaction=nonstopmode", "-halt-on-error"]
+
+    def resolve_command(self, engine: StatementEngine) -> str:
+        name = self.command or _DEFAULT_STATEMENT_COMMANDS[engine]
+        if Path(name).is_absolute():
+            return name
+        found = shutil.which(name)
+        if found is None:
+            raise RuntimeError(f"statement compiler not found in PATH: {name}")
+        return found
+
+
+DEFAULT_STATEMENT_TOOLCHAINS: dict[StatementEngine, StatementToolchainSettings] = {
+    StatementEngine.LATEX: StatementToolchainSettings(),
+}
+
+
 class Settings(_Frozen):
     limits: LimitCaps = LimitCaps()
     compile: CompileLimits = CompileLimits()
     isolate: IsolateSettings = IsolateSettings()
     storage: StorageSettings = StorageSettings()
     toolchains: dict[Language, ToolchainSettings] = DEFAULT_TOOLCHAINS
+    statement_toolchains: dict[StatementEngine, StatementToolchainSettings] = (
+        DEFAULT_STATEMENT_TOOLCHAINS
+    )
     # Where these settings came from; None means built-in defaults.
     source_path: Path | None = None
 
@@ -205,6 +249,9 @@ class Settings(_Frozen):
 
     def toolchain_for_source(self, path: Path | str) -> ToolchainSettings:
         return self.toolchain(language_for_source(path))
+
+    def statement_toolchain(self, engine: StatementEngine) -> StatementToolchainSettings:
+        return self.statement_toolchains.get(engine, StatementToolchainSettings())
 
 
 def config_search_paths() -> list[Path]:
