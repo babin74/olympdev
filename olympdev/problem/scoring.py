@@ -106,6 +106,7 @@ def check_solution_group_tags(
     results: dict[int, str | None] = {}
     for group in configuration.groups:
         expectation = solution.group_tag_expectation(group.id)
-        observed = [verdicts[name] for name in tests_by_group[group.id] if name in verdicts]
-        results[group.id] = match_solution_tag(expectation, observed)
+        names = [name for name in tests_by_group[group.id] if name in verdicts]
+        observed = [verdicts[name] for name in names]
+        results[group.id] = match_solution_tag(expectation, observed, names)
     return results

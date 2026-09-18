@@ -169,7 +169,13 @@ def test_verify_report_flags_a_wrong_group_tags_claim(
 
     digest = ProblemVerificationPipeline.make_input_digest(
         storage,
-        solutions=[SolutionVerificationSpec(tag=wrong_claim.tag, testing_digest=testing_digest)],
+        solutions=[
+            SolutionVerificationSpec(
+                name=wrong_claim.name,
+                tag=wrong_claim.tag,
+                testing_digest=testing_digest,
+            )
+        ],
     )
     pipeline = ProblemVerificationPipeline("points-verify-wrong-claim")
     run_pipeline(
@@ -187,7 +193,11 @@ def test_verify_report_flags_a_wrong_group_tags_claim(
     assert column.matched is False
     assert column.reason is not None
     assert "group 1" in column.reason and "missing required verdict WA" in column.reason
-    assert "group 2" in column.reason and "unexpected verdict WA" in column.reason
+    assert "group 2" in column.reason
+    assert "unexpected verdict WA on tests/g2-01.txt" in column.reason
+    # The reason names the offending test once; it used to be spliced in
+    # twice, from the group's failing_tests and from the mismatch itself.
+    assert column.reason.count("tests/g2-01.txt") == 1
     group1 = next(group for group in column.groups if group.group_id == 1)
     group2 = next(group for group in column.groups if group.group_id == 2)
     assert group1.tag_checked and "missing required verdict WA" in group1.tag_reason

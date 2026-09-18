@@ -10,6 +10,11 @@ from olympdev.settings import get_settings
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
+#: Digest of zero bytes. Content addressing makes an empty blob recognisable
+#: without fetching it, which is what lets a report skip offering an empty
+#: stream's digest as if it were worth looking at.
+EMPTY_BLOB_DIGEST = hashlib.sha256(b"").hexdigest()
+
 
 class AbstractStorage(ABC):
     def get_bytes_digest(self, content: bytes) -> str:

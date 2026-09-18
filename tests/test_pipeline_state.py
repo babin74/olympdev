@@ -157,7 +157,9 @@ def _verification_digest(
     return ProblemVerificationPipeline.make_input_digest(
         storage,
         solutions=[
-            SolutionVerificationSpec(tag="main", testing_digest=testing_digest)
+            SolutionVerificationSpec(
+                name="sol", tag="main", testing_digest=testing_digest
+            )
         ],
     )
 

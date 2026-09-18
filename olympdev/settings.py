@@ -11,8 +11,11 @@ module (including ``schema`` and ``storage``) may depend on it.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
+import stat
+import subprocess
 import tempfile
 import tomllib
 from collections.abc import Iterator, Mapping
@@ -206,6 +209,34 @@ _DEFAULT_STATEMENT_COMMANDS: dict[StatementEngine, str] = {
     StatementEngine.LATEX: "latexmk",
 }
 
+#: Asking TeX where its cache lives is a local lookup; it should never hang.
+_KPSEWHICH_TIMEOUT_SEC = 5.0
+
+_logger = logging.getLogger(__name__)
+_warned: set[str] = set()
+
+
+def _note_once(message: str, *, level: int = logging.WARNING) -> None:
+    """Host facts do not change between runs; saying them once is enough."""
+    if message not in _warned:
+        _warned.add(message)
+        _logger.log(level, "%s", message)
+
+
+def _readable_by_another_user(path: Path) -> bool:
+    """Whether a process running as a different user could read this directory.
+
+    isolate runs sandboxed processes under its own unprivileged user. A bind
+    mount is made by root and succeeds regardless, but reads through it are
+    still checked against the directory's own mode - which is why a cache
+    living in a private home directory (mode 750) is invisible inside.
+    """
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return False
+    return mode & 0o005 == 0o005
+
 
 class StatementToolchainSettings(_Frozen):
     """How to compile one statement engine's source into a PDF.
@@ -216,6 +247,65 @@ class StatementToolchainSettings(_Frozen):
 
     command: str | None = None
     args: list[str] = ["-pdf", "-interaction=nonstopmode", "-halt-on-error"]
+    #: TeX's generated-font cache, bound read-only into the statement
+    #: sandbox so Cyrillic (T2A/LH) metrics generated on the host are
+    #: readable inside it. Unset asks TeX itself where it keeps them; an
+    #: empty string mounts nothing.
+    texmf_var: Path | str | None = None
+
+    def resolve_texmf_var(self) -> Path | None:
+        """The host's ``$TEXMFVAR``, when the sandbox could actually read it.
+
+        A cache that the sandbox cannot read is worse than no cache: it
+        mounts, TeX finds nothing, and the failure blames a font. So an
+        unreadable directory is reported here and not mounted at all.
+        """
+        explicit = self.texmf_var is not None
+        if explicit:
+            if str(self.texmf_var) == "":
+                return None
+            path = Path(self.texmf_var).expanduser()
+        else:
+            probed = self._probe_texmf_var()
+            if probed is None:
+                return None
+            path = probed
+        if not path.is_dir():
+            if explicit:
+                _note_once(f"statement texmf_var is not a directory: {path}")
+            return None
+        if not _readable_by_another_user(path):
+            # Only statements that need generated fonts care, and the ones
+            # that do say so themselves when they fail - so this is a note,
+            # not a warning on every English build.
+            _note_once(
+                f"TeX's font cache at {path} is not readable by the sandbox "
+                "user, so Cyrillic statements cannot find their metrics. "
+                f"Run `chmod -R a+rX {path}`; only that directory is bound "
+                "into the sandbox, so the ones above it stay as they are.",
+                level=logging.INFO,
+            )
+            return None
+        return path
+
+    @staticmethod
+    def _probe_texmf_var() -> Path | None:
+        """Ask TeX itself where it caches generated fonts."""
+        kpsewhich = shutil.which("kpsewhich")
+        if kpsewhich is None:
+            return None
+        try:
+            found = subprocess.run(
+                [kpsewhich, "-var-value=TEXMFVAR"],
+                capture_output=True,
+                text=True,
+                timeout=_KPSEWHICH_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if found.returncode != 0 or not found.stdout.strip():
+            return None
+        return Path(found.stdout.strip()).expanduser()
 
     def resolve_command(self, engine: StatementEngine) -> str:
         name = self.command or _DEFAULT_STATEMENT_COMMANDS[engine]

@@ -11,8 +11,9 @@
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[notebook]"     # без extra — только ядро, без HTML-видов
+pip install -e ".[notebook]"     # extra нужен только для ноутбука
 
+olympdev new contest my-contest --problem aplusb   # рабочий скелет
 olympdev run example-contest --solution sol-wa
 olympdev verify example-contest          # все решения задачи, сверка с тегами
 ```
@@ -169,15 +170,66 @@ p.verify()                     # все решения сверяются с т�
 
 | Команда | Что делает |
 |---|---|
+| `olympdev new contest\|problem <path>` | рабочий скелет: `info.json`, gen/valid/check, сэмпл, решение |
+| `olympdev schema info\|contest [--out FILE]` | JSON-схема `info.json` / `olympdev.json` |
 | `olympdev run <target> [--solution NAME] [--jobs N]` | прогон задачи или контеста |
 | `olympdev verify <target> [--solution NAME]` | сверка решений с тегами, матрица тест × решение (при `mode: "group-points"` — ещё и баллы по группам) |
-| `olympdev statement <target> --lang ru [--out FILE]` | компиляция условия задачи в PDF |
+| `olympdev statement <target> --lang ru [--contest] [--out FILE]` | условие задачи в PDF; с `--contest` — весь контест одним буклетом |
 | `olympdev stress <target> --candidate NAME (--group N \| --gen-args ARGV)` | решение против эталона на растущих сидах, до первого расхождения |
 | `olympdev compile-commands <target>` | compilation database для clangd/IDE |
 | `olympdev show <digest>` | содержимое блоба из хранилища |
 | `olympdev config` | действующие настройки и их источник |
 
 Общие флаги: `--config PATH`, `--html PATH`, `--jobs N`, `--problem NAME`.
+У `run` и `verify` есть ещё `--digests`: под таблицей печатаются digest'ы входа,
+вывода и stderr каждого теста, а `olympdev show <digest>` показывает содержимое.
+Так смотрят ответ на сэмпл при подготовке условия. Без флага digest печатается
+только для упавших тестов — это то место, где, например, видно
+`std::bad_alloc`.
+
+`--jobs N` не ограничивается настройкой `isolate.sandbox_count`, а заменяет её:
+`sandbox_count` — это лишь значение по умолчанию для `--jobs`, и песочниц
+создаётся ровно столько, сколько запрошено.
+
+**Кириллица.** Метрики шрифтов LH (T2A) TeX генерирует по требованию через
+`mktextfm` и кладёт в `$TEXMFVAR`. В песочнице ни `mktextfm`, ни записи нет,
+поэтому кеш монтируется из хоста только на чтение. Песочница работает не от
+вашего пользователя, так что кеш должен быть ему доступен:
+
+```bash
+chmod -R a+rX "$(kpsewhich -var-value=TEXMFVAR)"
+```
+
+Монтируется именно этот каталог, права каталогов выше не проверяются — кеш
+внутри `$HOME` с режимом 750 работает, сам `$HOME` открывать не нужно. Если
+какой-то метрики в кеше нет, olympdev назовёт её в сообщении об ошибке;
+сгенерировать её можно на хосте (`mktextfm <имя>`).
+
+`--contest` собирает все задачи контеста в один PDF через общий шаблон
+документа. Нужны две вещи: запись для этого языка в `statements` контеста и
+условие на нём у **каждой** задачи — буклет не бывает наполовину собранным,
+поэтому недостающий язык называется по имени задачи до запуска latex.
+
+Метаданные буклета задаются **отдельно для каждого языка** — заголовок, место
+и дата печатаются, а значит переводятся:
+
+```json
+{
+    "problems": ["aplusb"],
+    "statements": [
+        {"lang": "en", "title": "Winter Cup", "location": "Kazan", "date": "3 March 2026"},
+        {"lang": "ru", "title": "Зимний кубок", "location": "Казань", "date": "3 марта 2026"}
+    ]
+}
+```
+
+Форма та же, что у `statements` в `info.json`, — язык адресуется одинаково в
+обоих файлах.
+
+Схему из `olympdev schema info --out info.schema.json` можно подключить в
+редакторе (в VS Code — настройка `json.schemas`); в сам `info.json` ключ
+`$schema` класть нельзя — неизвестные поля отвергаются намеренно, чтобы
+опечатка вроде `memory_limit_kb` не прошла молча.
 
 ## Формат контеста
 
@@ -190,8 +242,10 @@ p.verify()                     # все решения сверяются с т�
 
 У задачи — `info.json`: `time_limit_ms`, `memory_limit_mb`, решения, исходники
 (`gen`, `check`, `valid`), сэмплы и тесты. Тест — либо файл (`input_file`), либо
-генерация (`gen_cmd` + `name`). Тег `main` обязателен, если решения перечислены;
-теги и типы исходников не должны повторяться.
+генерация (`gen_cmd` + `name`). Тег `main` обязателен, если решения перечислены,
+и должен быть ровно один; типы исходников не должны повторяться. Остальные
+теги повторяться могут — три решения с тегом `WA` это три разные ошибки, а не
+конфликт.
 
 Решение адресуется только по имени — стему его файла (`sol-wa.cpp` →
 `sol-wa`), например в `--solution` или `p.run(...)`/`p.verify(...)`. Тег —
@@ -213,6 +267,12 @@ p.verify()                     # все решения сверяются с т�
 Predictable error — решение успешно прогнали (скомпилировалось, не `FL`/`CF`)
 и оно не `OK`.
 
+`ML` — это срабатывание cgroup-лимита (OOM killer), то есть постепенный рост
+RSS. Аллокация заведомо сверх лимита обычно даёт не `ML`, а `RE`:
+`std::vector` бросает `bad_alloc`, ловить его некому, процесс делает `abort`.
+Отличить одно от другого помогает stderr упавшего теста — его digest печатается
+в отчёте.
+
 В пакет входят `testlib.h` и `olymp.sty`.
 
 ## Требования
@@ -221,7 +281,8 @@ Predictable error — решение успешно прогнали (скомп
 - [isolate](https://github.com/ioi/isolate) на хосте
 - компилятор C/C++ (`g++` / `clang++`)
 
-Зависимости ядра: Pydantic 2. Extra `notebook`: Jinja2 и IPython.
+Зависимости ядра: Pydantic 2 и Jinja2 (условия и `--html` — часть ядра).
+Extra `notebook`: IPython для виджетов в ноутбуке.
 
 ## Тесты
 
@@ -229,11 +290,16 @@ Predictable error — решение успешно прогнали (скомп
 pip install pytest
 pytest tests -m "not slow"   # без isolate
 pytest tests                 # включая sandbox и example-contest/aplusb
+pytest tests --run-attacks   # ещё и tests/attacks (см. ниже)
 ```
 
 Маркер `slow` — тесты, которые реально компилируют и гоняют программы в isolate.
+
 В `tests/attacks/` — прогоны вредоносных payload (macro bomb, include хоста,
-TL/ML) через тот же пайплайн, что и обычное решение.
+TL/ML) через тот же пайплайн, что и обычное решение. **По умолчанию они не
+запускаются**, даже при полном `pytest tests`: это настоящие fork-бомбы и
+пожиратели памяти, и на машине с неверно настроенным isolate их запуск сам по
+себе является атакой. Включаются только явным `--run-attacks`.
 
 ## Пока нет
 

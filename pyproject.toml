@@ -10,15 +10,18 @@ description = "OlympDev: contest problem tooling"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.10,<3",
+    # `statement` and `--html` are core CLI commands, and both render through
+    # jinja2. The view models themselves never import it, so a report still
+    # prints from plain text - see olympdev/frontend/view.py.
+    "jinja2>=3.1.2,<4",
 ]
 license = "MIT"
 license-files = ["LICENSE"]
 
-# HTML views and the notebook facade. A worker needs neither, so jinja2 is not
-# a runtime dependency of the core package.
+# The notebook facade: rich display and widgets. Everything the CLI prints,
+# including HTML reports and statements, works without this extra.
 [project.optional-dependencies]
 notebook = [
-    "jinja2>=3.1.2,<4",
     "ipython>=8",
 ]
 
@@ -39,4 +42,5 @@ olympdev = ["assets/**/*"]
 python_classes = []
 markers = [
     "slow: tests that run isolate or compile inside a sandbox",
+    "attack: adversarial payloads; skipped unless --run-attacks is passed",
 ]

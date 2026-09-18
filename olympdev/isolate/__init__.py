@@ -5,6 +5,7 @@ from olympdev.isolate.profiles import (
     RUN_PROFILE,
     TOOL_PROFILE,
     SandboxProfile,
+    statement_profile,
 )
 from olympdev.isolate.runner import IsolateSandBox, ensure_isolate_available
 from olympdev.isolate.sandbox_paths import (
@@ -47,4 +48,5 @@ __all__ = [
     "default_quota",
     "ensure_isolate_available",
     "sandbox_relpath",
+    "statement_profile",
 ]

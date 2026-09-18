@@ -23,6 +23,10 @@ from olympdev.worker.verdict import Verdict
 
 
 class SolutionVerificationSpec(FrozenModel):
+    #: How a solution is addressed and reported - its file's stem. The tag
+    #: below is a verdict expectation, never an identity, so it may repeat
+    #: across solutions while this may not.
+    name: str
     tag: str
     testing_digest: str
 
@@ -34,13 +38,20 @@ class ProblemVerificationArguments(StorageModel):
     def _check_solutions(self) -> Self:
         if not self.solutions:
             raise ValueError("no solutions to verify")
+        seen: set[str] = set()
         for spec in self.solutions:
+            if not spec.name:
+                raise ValueError("solution name must not be empty")
+            if spec.name in seen:
+                raise ValueError(f"duplicate solution name {spec.name!r}")
+            seen.add(spec.name)
             if parse_solution_tag(spec.tag).ignored:
-                raise ValueError(f"cannot verify ignored solution {spec.tag!r}")
+                raise ValueError(f"cannot verify ignored solution {spec.name!r}")
         return self
 
 
 class SolutionVerificationResult(FrozenModel):
+    name: str
     tag: str
     matched: bool
     reason: str | None = None
@@ -53,10 +64,20 @@ class ProblemVerificationResult(StorageModel):
     solutions: list[SolutionVerificationResult]
 
 
-def _observed_verdicts(result: ProblemTestingResult) -> list[Verdict]:
+def _observed_verdicts(
+    result: ProblemTestingResult,
+) -> tuple[list[Verdict], list[str] | None]:
+    """The verdicts to match, and the test each came from.
+
+    A result with no tests carries one pipeline-level verdict (a compile
+    failure, say) that belongs to no test, so there is no name to give.
+    """
     if result.tests:
-        return [test.verdict for test in result.tests]
-    return [result.verdict]
+        return (
+            [test.verdict for test in result.tests],
+            [test.name for test in result.tests],
+        )
+    return [result.verdict], None
 
 
 class ProblemVerificationPipeline(AbstractPipeline):
@@ -138,14 +159,15 @@ class ProblemVerificationPipeline(AbstractPipeline):
             testing_result = testing.get_result(storage)
             output_digest = testing.get_output_digest()
             if testing_result is None or output_digest is None:
-                self.fail(f"missing testing result for {spec.tag}")
+                self.fail(f"missing testing result for {spec.name}")
                 return NextJobStatus.FINISHED
+            verdicts, test_names = _observed_verdicts(testing_result)
             reason = match_solution_tag(
-                parse_solution_tag(spec.tag),
-                _observed_verdicts(testing_result),
+                parse_solution_tag(spec.tag), verdicts, test_names
             )
             results.append(
                 SolutionVerificationResult(
+                    name=spec.name,
                     tag=spec.tag,
                     matched=reason is None,
                     reason=reason,

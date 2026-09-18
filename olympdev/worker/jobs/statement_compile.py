@@ -15,10 +15,10 @@ import re
 from pathlib import Path
 
 from olympdev.isolate import (
-    COMPILE_PROFILE,
     COMPILE_RESERVED_PATHS,
     IsolateMeta,
     sandbox_relpath,
+    statement_profile,
 )
 from olympdev.schema import FrozenModel, StorageModel
 from olympdev.storage import AbstractStorage
@@ -44,6 +44,29 @@ _TEXLIVE_BIN_DIR = re.compile(r"^/usr/local/texlive/[^/]+/bin/[^/]+$")
 
 #: Log tail kept on a failed compile, for a useful failure_reason.
 _LOG_TAIL_BYTES = 4096
+
+#: kpathsea asking for a font it could not find and cannot build here. The
+#: sandbox has no writable TEXMFVAR and no mktextfm, so this never resolves
+#: itself - it is a host provisioning problem, and saying so beats a raw
+#: latexmk tail that mentions a font name and nothing else.
+_MISSING_FONT = re.compile(r"mktextfm|mktexpk|Font .* not loadable")
+_MISSING_FONT_HINT = (
+    "a font metric is missing and cannot be generated inside the sandbox "
+    "(Cyrillic statements need the LH/T2A metrics). Two things fix this, both "
+    "on the host: generate the metric once - `mktextfm <name>`, or "
+    "`tlmgr install lh` - and make TeX's font cache readable by the sandbox "
+    "user, which runs as nobody, not as you: "
+    "`chmod -R a+rX \"$(kpsewhich -var-value=TEXMFVAR)\"`. Only the cache "
+    "itself needs it - the sandbox binds that directory, so the modes of the "
+    "directories above it do not matter and your home stays private"
+)
+
+
+def _read_tail(path: Path) -> str:
+    """The last few KiB of a file, or '' when it was never written."""
+    if not path.is_file():
+        return ""
+    return path.read_bytes()[-_LOG_TAIL_BYTES:].decode("utf-8", errors="replace")
 
 
 def _compiler_dir_allowed(path: Path) -> bool:
@@ -120,6 +143,9 @@ class StatementCompileResult(StorageModel):
     stderr_digest: str
     meta: IsolateMeta
     pdf_digest: str | None = None
+    #: TeX's own .log. This is where an error names the .tex file and the
+    #: line; stdout and stderr only carry latexmk's summary of it.
+    log_digest: str | None = None
 
 
 class StatementCompileJob(AbstractJob):
@@ -210,7 +236,7 @@ class StatementCompileJob(AbstractJob):
             meta = sandbox.run(
                 args,
                 compile_job_limits(),
-                COMPILE_PROFILE,
+                statement_profile(),
                 stdout_file=stdout_local_path,
                 stderr_file=stderr_local_path,
             )
@@ -223,11 +249,18 @@ class StatementCompileJob(AbstractJob):
             if meta.is_successful_termination() and output_path.is_file():
                 pdf_digest = storage.upload_file(output_path)
 
+            # TeX writes <job>.log beside its output, whether it succeeded or
+            # not; on failure that log is the only place the error is spelled
+            # out, so keep it addressable either way.
+            log_path = sandbox.box_path(arguments.output_relpath.with_suffix(".log"))
+            log_digest = storage.upload_file(log_path) if log_path.is_file() else None
+
             result = StatementCompileResult(
                 stdout_digest=stdout_digest,
                 stderr_digest=stderr_digest,
                 meta=meta,
                 pdf_digest=pdf_digest,
+                log_digest=log_digest,
             )
             self.job_result = result.upload(storage)
 
@@ -238,11 +271,17 @@ class StatementCompileJob(AbstractJob):
 
             if pdf_digest is None:
                 self.job_status = JobStatus.FAILED
-                stderr_bytes = sandbox.box_path(stderr_local_path).read_bytes()
-                log_tail = stderr_bytes[-_LOG_TAIL_BYTES:].decode(
-                    "utf-8", errors="replace"
+                # The .log first: TeX puts the .tex name and line number
+                # there, while stderr usually holds only latexmk's summary.
+                tail = (
+                    _read_tail(log_path)
+                    or _read_tail(sandbox.box_path(stdout_local_path))
+                    or _read_tail(sandbox.box_path(stderr_local_path))
                 )
-                self.job_failure_reason = f"Statement compilation failed: {log_tail}"
+                reason = f"Statement compilation failed: {tail}"
+                if _MISSING_FONT.search(tail):
+                    reason = f"Statement compilation failed: {_MISSING_FONT_HINT}\n{tail}"
+                self.job_failure_reason = reason
                 return None
 
             return self.job_result

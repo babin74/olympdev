@@ -2,5 +2,20 @@
     "problems": [
         "aplusb",
         "points"
+    ],
+
+    "statements": [
+        {
+            "lang": "en",
+            "title": "Olympdev Example Contest",
+            "location": "Somewhere",
+            "date": "1 January 2026"
+        },
+        {
+            "lang": "ru",
+            "title": "Примерный контест olympdev",
+            "location": "Где-то",
+            "date": "1 января 2026"
+        }
     ]
 }

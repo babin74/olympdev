@@ -13,7 +13,10 @@
 \Examples
 \begin{example}
 \BLOCK{for sample in samples}
-\exmpfile{\VAR{sample.stem}.in}{\VAR{sample.stem}.out}
+\#{ The trailing % is load-bearing: the example environment sets \obeylines,
+    so an unswallowed end-of-line becomes a \par inside the tabular and the
+    sample table falls apart. }
+\exmpfile{\VAR{sample.stem}.in}{\VAR{sample.stem}.out}%
 \BLOCK{endfor}
 \end{example}
 \BLOCK{endif}

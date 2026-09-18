@@ -12,7 +12,10 @@ import json
 from pathlib import Path
 from typing import Any, Self
 
+from pydantic import ValidationError
+
 from olympdev.problem.types import (
+    ContestConfiguration,
     ContestStatementConfig,
     ProblemConfiguration,
     ProblemSolution,
@@ -164,33 +167,39 @@ class Contest:
         self,
         directory: Path,
         problems: dict[str, ProblemPackage],
-        statement: ContestStatementConfig | None = None,
+        statements: list[ContestStatementConfig] | None = None,
     ):
         self.directory = directory
         self.problems = problems
-        self.statement = statement
+        self.statements = list(statements or [])
 
     @classmethod
     def load(cls, path: Path | str) -> Self:
         path = Path(path)
         config_path = path if path.is_file() else path / CONTEST_FILE_NAME
-        data = _load_json(config_path)
-        names = data.get("problems")
-        if not isinstance(names, list) or not names:
-            raise ValueError(f"{config_path} must contain a non-empty problems list")
+        try:
+            configuration = ContestConfiguration.model_validate(_load_json(config_path))
+        except ValidationError as exc:
+            # Same treatment info.json gets: name the file, then let pydantic
+            # say which field and why.
+            raise ValueError(f"invalid contest file {config_path}: {exc}") from None
         directory = config_path.parent.resolve()
-        problems: dict[str, ProblemPackage] = {}
-        for name in names:
-            if not isinstance(name, str) or not name or "/" in name or name == "..":
-                raise ValueError(f"invalid problem name in {config_path}: {name!r}")
-            problems[name] = ProblemPackage.load(directory / name)
-        statement_data = data.get("statement")
-        statement = (
-            ContestStatementConfig.model_validate(statement_data)
-            if statement_data is not None
-            else None
+        problems = {
+            name: ProblemPackage.load(directory / name)
+            for name in configuration.problems
+        }
+        return cls(directory, problems, configuration.statements)
+
+    def statement_config(self, lang: str) -> ContestStatementConfig:
+        """Booklet metadata for one language - the only way to address one."""
+        for item in self.statements:
+            if item.lang == lang:
+                return item
+        available = ", ".join(sorted(item.lang for item in self.statements)) or "none"
+        raise KeyError(
+            f"no contest statement for lang {lang!r} in {self.directory.name} "
+            f"(have: {available})"
         )
-        return cls(directory, problems, statement)
 
     def problem(self, name: str) -> ProblemPackage:
         try:
@@ -208,15 +217,28 @@ class Contest:
         return resolve_problem_dir(self.directory, relative)
 
 
-def load_target(path: Path | str) -> Contest:
-    """Load whatever a path points at - a contest, or a single problem."""
+def resolve_target_config(path: Path | str) -> Path:
+    """The config file a target names: olympdev.json or info.json.
+
+    One rule, in one place, for every command's ``target`` argument - a
+    contest directory, an olympdev.json, a problem directory or an info.json.
+    A directory resolves to its contest file when it has one, otherwise to
+    its problem file.
+    """
     path = Path(path)
     if path.is_file():
-        if path.name == CONTEST_FILE_NAME:
-            return Contest.load(path)
-        package = ProblemPackage.load(path)
-        return Contest(package.directory.parent, {package.name: package})
-    if (path / CONTEST_FILE_NAME).is_file():
-        return Contest.load(path)
-    package = ProblemPackage.load(path)
+        return path
+    if path.is_dir():
+        contest_file = path / CONTEST_FILE_NAME
+        return contest_file if contest_file.is_file() else path / INFO_FILE_NAME
+    # Neither: let the loader report the missing file it actually wanted.
+    return path / INFO_FILE_NAME
+
+
+def load_target(path: Path | str) -> Contest:
+    """Load whatever a path points at - a contest, or a single problem."""
+    config_path = resolve_target_config(path)
+    if config_path.name == CONTEST_FILE_NAME:
+        return Contest.load(config_path)
+    package = ProblemPackage.load(config_path)
     return Contest(package.directory.parent, {package.name: package})

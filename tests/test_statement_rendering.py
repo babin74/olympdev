@@ -57,6 +57,22 @@ def test_points_fragment_has_subtask_table_and_no_pending_samples():
     assert "\\SubtaskWithCost{2}{60}" in fragment
 
 
+def test_every_exmpfile_line_swallows_its_newline():
+    """The example environment sets \\obeylines, so a bare end-of-line after
+    \\exmpfile becomes a \\par inside the tabular and the sample table breaks.
+    Each line must end with a comment character."""
+    aplusb_dir = Path(__file__).resolve().parent.parent / "example-contest" / "aplusb"
+    package = ProblemPackage.load(aplusb_dir)
+    fragment, _sources, _pending = _statement_fragment_sources(
+        package, package.statement_spec("en")
+    )
+    exmpfile_lines = [
+        line for line in fragment.splitlines() if line.startswith("\\exmpfile")
+    ]
+    assert exmpfile_lines, "aplusb has samples, so it must emit \\exmpfile lines"
+    assert all(line.endswith("%") for line in exmpfile_lines), exmpfile_lines
+
+
 def test_ungrouped_fragment_has_no_subtask_section():
     """aplusb has no mode/groups - its fragment must not gain a \\Constraints
     block just because the statement pipeline now knows how to render one."""

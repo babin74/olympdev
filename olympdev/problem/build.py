@@ -164,7 +164,11 @@ def build_solution_verification_input(
     return ProblemVerificationPipeline.make_input_digest(
         storage,
         solutions=[
-            SolutionVerificationSpec(tag=resolved.tag, testing_digest=testing_digest)
+            SolutionVerificationSpec(
+                name=resolved.name,
+                tag=resolved.tag,
+                testing_digest=testing_digest,
+            )
         ],
     )
 
@@ -185,6 +189,7 @@ def build_problem_verification_input(
         storage,
         solutions=[
             SolutionVerificationSpec(
+                name=item.name,
                 tag=item.tag,
                 testing_digest=build_problem_testing_input(
                     storage,
@@ -369,7 +374,7 @@ def build_problem_statement_input(
     settings = settings or get_settings()
     spec = package.statement_spec(lang)
     contest_statement = contest_statement or ContestStatementConfig(
-        title=spec.title, date=""
+        lang=lang, title=spec.title, date=""
     )
     fragment, sources, pending = _statement_fragment_sources(package, spec)
     answer_testing_digests = (
@@ -399,8 +404,8 @@ def build_contest_statement_input(
     """Upload a whole contest's statement (every problem, one language) and
     return the pipeline input digest."""
     settings = settings or get_settings()
-    if contest.statement is None:
-        raise ValueError(f"{contest.directory}: no statement config in olympdev.json")
+    # Title, venue and date are printed, so each language has its own.
+    contest_statement = contest.statement_config(lang)
     fragments: list[str] = []
     fragment_sources: list[list[tuple[Path | bytes, str]]] = []
     answer_testing_digests: list[str] = []
@@ -432,7 +437,7 @@ def build_contest_statement_input(
         fragments=fragments,
         fragment_sources=fragment_sources,
         answer_testing_digests=answer_testing_digests,
-        contest_statement=contest.statement,
+        contest_statement=contest_statement,
         engine=engine,
         lang=lang,
         settings=settings,

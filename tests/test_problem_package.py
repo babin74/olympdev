@@ -105,15 +105,29 @@ def test_solution_is_not_addressed_by_its_tag(contest_dir: Path):
         package.solution("WA")
 
 
-def test_duplicate_solution_tags_are_rejected():
-    with pytest.raises(ValidationError, match="duplicate solution tag 'WA'"):
+def test_duplicate_solution_tags_are_allowed():
+    """A tag is an expectation, so two solutions may both be expected to WA."""
+    config = ProblemConfiguration.model_validate({
+        "time_limit_ms": 1000,
+        "memory_limit_mb": 64,
+        "solutions": [
+            {"file": "a.cpp", "tag": "main"},
+            {"file": "b.cpp", "tag": "WA"},
+            {"file": "c.cpp", "tag": "WA"},
+        ],
+    })
+    assert [solution.name for solution in config.solutions] == ["a", "b", "c"]
+
+
+def test_two_main_solutions_are_rejected():
+    """Which one generates the answers would otherwise be silently arbitrary."""
+    with pytest.raises(ValidationError, match="duplicate 'main' solution"):
         ProblemConfiguration.model_validate({
             "time_limit_ms": 1000,
             "memory_limit_mb": 64,
             "solutions": [
                 {"file": "a.cpp", "tag": "main"},
-                {"file": "b.cpp", "tag": "WA"},
-                {"file": "c.cpp", "tag": "WA"},
+                {"file": "b.cpp", "tag": "main"},
             ],
         })
 

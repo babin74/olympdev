@@ -15,8 +15,11 @@ from pathlib import Path
 import pytest
 
 from olympdev.isolate import IsolateFactory
-from olympdev.problem.build import build_problem_statement_input
-from olympdev.problem.package import ProblemPackage
+from olympdev.problem.build import (
+    build_contest_statement_input,
+    build_problem_statement_input,
+)
+from olympdev.problem.package import Contest, ProblemPackage
 from olympdev.storage.filestorage import FileStorage
 from olympdev.worker.pipeline import (
     AbstractPipeline,
@@ -129,14 +132,15 @@ def test_statement_pipeline_computes_missing_sample_answers(
 def test_statement_pipeline_compiles_a_real_pdf(
     storage: FileStorage, isolate_factory: IsolateFactory, aplusb_dir: Path
 ):
-    """``en`` is used here (not ``ru``) because it's what's actually proven
-    to compile across TeX Live installs without any font cache pre-warmed -
-    ``ru``'s T2A/Cyrillic virtual fonts can need ``mktextfm`` to generate a
-    .tfm the first time, which needs a writable texmf-var the isolate
-    sandbox may not grant; that's a host font-cache provisioning concern
-    orthogonal to whether olympdev's own toolchain/allowlist plumbing works
-    (see ``tests/test_statement_rendering.py`` for a sandbox-free check that
-    the ``ru`` document itself renders with the right macros/language)."""
+    """``en`` is used here (not ``ru``) because it needs nothing of the host
+    beyond a TeX install. ``ru``'s T2A/Cyrillic metrics are generated on
+    demand by ``mktextfm``, which cannot run in the sandbox; the statement
+    profile binds the host's ``$TEXMFVAR`` read-only so already-generated
+    ones are found (see ``isolate/profiles.py``), but whether a given metric
+    was ever generated - and whether that cache is readable by the sandbox
+    user - is host provisioning, not olympdev's plumbing. See
+    ``tests/test_statement_rendering.py`` for a sandbox-free check that the
+    ``ru`` document itself renders with the right macros and language."""
     if shutil.which("g++") is None:
         pytest.skip("g++ is not available")
     package = ProblemPackage.load(aplusb_dir)
@@ -152,6 +156,13 @@ def test_statement_pipeline_compiles_a_real_pdf(
     assert pdf_digest is not None
     pdf_bytes = storage.download_bytes(pdf_digest)
     assert pdf_bytes is not None and pdf_bytes.startswith(b"%PDF")
+
+    # TeX's own log is kept whatever the outcome: on a failure it is the only
+    # place the error names a .tex file and a line.
+    compile_result = pipeline.compile_result(storage)
+    assert compile_result is not None and compile_result.log_digest is not None
+    log_bytes = storage.download_bytes(compile_result.log_digest)
+    assert log_bytes is not None and b"This is pdfTeX" in log_bytes
 
     # Restored, this already-finished pipeline must report FINISHED right
     # away rather than re-issuing anything. (Comparing job-id sets rather
@@ -177,3 +188,43 @@ def test_statement_pipeline_compiles_a_real_pdf(
         for step in scheduled.pipeline._steps.values()
     } | {step.job.job_id for step in restored._steps.values()}
     assert executed_before == executed_after
+
+
+def test_contest_statement_typesets_every_problem_into_one_pdf(
+    storage: FileStorage, isolate_factory: IsolateFactory
+):
+    """A whole-contest build is one pipeline and one PDF, not a PDF per
+    problem stapled together - so a sample whose answer must be computed is
+    handled the same way it is for a single problem."""
+    if shutil.which("g++") is None:
+        pytest.skip("g++ is not available")
+    if not _latex_available():
+        pytest.skip("no allowed LaTeX compiler is reachable")
+    contest_dir = Path(__file__).resolve().parent.parent / "example-contest"
+    contest = Contest.load(contest_dir)
+    digest = build_contest_statement_input(storage, contest, lang="en")
+    pipeline = StatementPipeline("example-contest-en")
+    run_pipeline(
+        pipeline,
+        PipelineContext(
+            input_digest=digest, storage=storage, isolate_factory=isolate_factory
+        ),
+    )
+    assert pipeline.get_status() is PipelineStatus.COMPLETED, (
+        pipeline.get_failure_reason()
+    )
+    pdf_digest = pipeline.get_output_digest()
+    assert pdf_digest is not None
+    pdf_bytes = storage.download_bytes(pdf_digest)
+    assert pdf_bytes is not None and pdf_bytes.startswith(b"%PDF")
+
+
+def test_contest_statement_names_the_problem_missing_a_language(
+    storage: FileStorage,
+):
+    """example-contest's `points` has no `ru` statement. A booklet cannot be
+    half-typeset, so this is refused up front and says which problem."""
+    contest_dir = Path(__file__).resolve().parent.parent / "example-contest"
+    contest = Contest.load(contest_dir)
+    with pytest.raises(ValueError, match="points: no statement for lang 'ru'"):
+        build_contest_statement_input(storage, contest, lang="ru")

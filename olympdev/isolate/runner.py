@@ -114,6 +114,11 @@ def _build_run_args(
 
 class IsolateSandBox:
     _quota_supported: bool | None = None
+    #: Boxes initialise concurrently, so without a lock every one of them
+    #: discovers a quota-less filesystem separately and says so. The finding
+    #: is a property of the host, not of the box: report it once.
+    _quota_lock = threading.Lock()
+    _quota_warned = False
 
     def __init__(
         self,
@@ -375,11 +380,16 @@ class IsolateSandBox:
             self._cleanup_isolate()
             code, stderr = attempt(init_args)
         if code != 0 and quota is not None:
-            logger.warning(
-                "isolate init with quota failed, retrying without quota: %s",
-                (stderr or "").strip(),
-            )
-            IsolateSandBox._quota_supported = False
+            with IsolateSandBox._quota_lock:
+                first = not IsolateSandBox._quota_warned
+                IsolateSandBox._quota_warned = True
+                IsolateSandBox._quota_supported = False
+            if first:
+                logger.warning(
+                    "isolate quotas are unavailable on this filesystem, "
+                    "continuing without them: %s",
+                    (stderr or "").strip(),
+                )
             init_args = _build_init_args(None)
             self._cleanup_isolate()
             code, stderr = attempt(init_args)

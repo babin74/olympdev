@@ -9,8 +9,10 @@
 - [x] Согласовать `get_permissible_verdicts` / `get_expected_verdicts`
 - [x] Описать допустимые теги в README
 
-Уникальность тегов проверяется при загрузке (`ProblemConfiguration._check_solution_tags`):
-`main` ровно один, остальные теги не повторяются.
+При загрузке проверяется (`ProblemConfiguration._check_solution_tags`) только
+то, что решение с тегом `main` ровно одно. Остальные теги повторяться могут:
+тег — это ожидание по вердиктам, а не имя. Уникальность требуется от имён
+решений — стемов файлов (`_check_solution_names`), ими же решение и адресуется.
 
 Predictable errors: `WA`, `TL`, `ML`, `RE`, `PT`.
 

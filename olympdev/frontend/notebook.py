@@ -21,6 +21,7 @@ from olympdev.frontend.view import (
 )
 from olympdev.isolate import IsolateFactory
 from olympdev.problem.build import (
+    build_contest_statement_input,
     build_problem_statement_input,
     build_problem_testing_input,
     build_problem_verification_input,
@@ -153,7 +154,6 @@ class ProblemWorkbench:
             )
             ident = "verify"
             solutions_list = self.package.verifiable_solutions()
-            names = {s.tag: s.name for s in solutions_list}
         else:
             resolved = self._resolve(solution)
             digest = build_solution_verification_input(
@@ -166,9 +166,6 @@ class ProblemWorkbench:
                 solution, "name", "verify"
             )
             solutions_list = [resolved] if hasattr(resolved, "tag") else []
-            names = (
-                {resolved.tag: resolved.name} if hasattr(resolved, "tag") else {}
-            )
         pipeline = ProblemVerificationPipeline(pipeline_id or f"{self.name}-{ident}")
         context = PipelineContext(
             input_digest=digest,
@@ -194,7 +191,6 @@ class ProblemWorkbench:
             problem_name=self.name,
             wall_seconds=time.perf_counter() - started,
             jobs=observer.jobs,
-            solution_names=names,
             configuration=self.package.configuration,
             solutions=solutions_list,
         )
@@ -237,6 +233,7 @@ class ProblemWorkbench:
             run_pipeline(pipeline, context, executor=executor, observer=observer)
         return StatementResultView.from_pipeline(
             pipeline,
+            self.workbench.storage,
             problem_name=self.name,
             lang=lang,
             wall_seconds=time.perf_counter() - started,
@@ -349,3 +346,55 @@ class Workbench:
                 raise ValueError(f"name a problem: {', '.join(names)}")
             name = names[0]
         return ProblemWorkbench(self, self.contest.problem(name))
+
+    def statement(
+        self,
+        lang: str,
+        *,
+        trace: bool = False,
+        jobs: int | None = None,
+        cache: AbstractCacheStorage | None = None,
+        pipeline_id: str | None = None,
+    ) -> StatementResultView:
+        """Compile the whole contest as one booklet: every problem, one PDF.
+
+        Distinct from ``problem(name).statement(lang)``, which typesets a
+        single problem through the same document shell. Both go through one
+        ``StatementPipeline``, so samples whose answers must be computed are
+        handled the same way either way.
+        """
+        observer = NotebookObserver(live=trace)
+        digest = build_contest_statement_input(
+            self.storage,
+            self.contest,
+            lang=lang,
+            settings=self.settings,
+        )
+        name = self.contest.directory.name
+        pipeline = StatementPipeline(pipeline_id or f"{name}-statement-{lang}")
+        context = PipelineContext(
+            input_digest=digest,
+            storage=self.storage,
+            isolate_factory=self.isolate_factory,
+        )
+        executor = JobExecutor(cache if cache is not None else self.cache)
+        workers = jobs if jobs is not None else self.jobs
+        started = time.perf_counter()
+        if workers > 1:
+            run_pipeline_parallel(
+                pipeline,
+                context,
+                executor=executor,
+                observer=observer,
+                max_workers=workers,
+            )
+        else:
+            run_pipeline(pipeline, context, executor=executor, observer=observer)
+        return StatementResultView.from_pipeline(
+            pipeline,
+            self.storage,
+            problem_name=name,
+            lang=lang,
+            wall_seconds=time.perf_counter() - started,
+            jobs=observer.jobs,
+        )

@@ -87,8 +87,10 @@ pipeline loops all follow from the table — do not hand-write job subclasses.
 ### Adding a frontend view
 
 - View model in [`frontend/view.py`](olympdev/frontend/view.py): plain data,
-  no HTML, no colours, and **no jinja2 import** — a worker installs olympdev
-  without the `notebook` extra and must still print reports. Domain decisions
+  no HTML, no colours, and **no jinja2 import** — every report must render
+  as plain text, with no template engine in the path. (jinja2 *is* a core
+  dependency — `statement` and `--html` need it — but the view layer must
+  never reach for it.) Domain decisions
   (which clock to show, how memory is derived) live here, not in a template.
 - Then a Jinja template taking that one view model, with styling in
   `_base.css`, and a matching function in `frontend/text.py`.
@@ -123,9 +125,11 @@ pipeline loops all follow from the table — do not hand-write job subclasses.
 
 - `pytest tests -m "not slow"` for the fast loop; `pytest tests` runs isolate
   and g++ too. Mark anything that compiles or sandboxes as `slow`.
-- `tests/attacks/` runs adversarial payloads through the real pipeline. Its
-  `conftest.py` marks only its own directory — a hook there receives the whole
-  session's items, and marking everything once made `-m "not slow"` empty.
+- `tests/attacks/` runs adversarial payloads through the real pipeline, and
+  is **skipped unless `--run-attacks` is passed** — on a host whose isolate is
+  misconfigured, running a fork bomb for real is the attack. Its `conftest.py`
+  marks only its own directory: a hook there receives the whole session's
+  items, and marking everything once made `-m "not slow"` empty.
 - Tests pin settings through the autouse `default_settings` fixture; override
   with `using_settings(...)` rather than mutating globals.
 - Prefer asserting behaviour over shape. Storage tests must not assume a flat
@@ -134,7 +138,8 @@ pipeline loops all follow from the table — do not hand-write job subclasses.
 ## Commands
 
 ```bash
-pip install -e ".[notebook]"      # core install omits jinja2 on purpose
+pip install -e ".[notebook]"      # extra is IPython only; the CLI needs no extra
+olympdev new contest <dir> --problem <name>   # a skeleton that already verifies
 olympdev verify example-contest   # end-to-end check on the sample problem
 olympdev config                   # which settings applied, and from which file
 pytest tests -m "not slow"

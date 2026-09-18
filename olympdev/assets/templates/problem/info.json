@@ -1,0 +1,31 @@
+{
+    "time_limit_ms": 1000,
+    "memory_limit_mb": 256,
+
+    "solutions": [
+        {"file": "solutions/main.cpp", "tag": "main"}
+    ],
+
+    "sources": [
+        {"file": "source/gen.cpp", "type": "gen"},
+        {"file": "source/valid.cpp", "type": "valid"},
+        {"file": "source/check.cpp", "type": "check"}
+    ],
+
+    "samples": [
+        {"input_file": "tests/sample-01.txt"}
+    ],
+
+    "tests": [
+        {"gen_cmd": "gen -c=1000", "name": "random-01.txt"},
+        {"gen_cmd": "gen -c=1000000000", "name": "random-02.txt"}
+    ],
+
+    "statements": [
+        {"lang": "en", "engine": "latex", "source": "statement/en.tex", "title": "__TITLE__"}
+    ],
+
+    "dev": {
+        "compile_options_path": "compile_commands.json"
+    }
+}

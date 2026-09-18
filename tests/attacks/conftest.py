@@ -24,12 +24,28 @@ from harness import (
 )
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    # This hook is handed the whole session's items, not just ours, so mark
-    # only the attack tests. Marking everything made `-m "not slow"` empty.
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Mark the attack tests, and keep them from starting by accident.
+
+    These run real fork bombs and memory hogs against the host's isolate. A
+    misconfigured sandbox turns them into an attack on the machine running
+    them, so `pytest tests` must not pick them up - only an explicit
+    `--run-attacks` does.
+
+    This hook is handed the whole session's items, not just ours, so it marks
+    only the attack tests. Marking everything made `-m "not slow"` empty.
+    """
+    requested = config.getoption("--run-attacks")
+    skip = pytest.mark.skip(reason="adversarial payloads; pass --run-attacks to run")
     for item in items:
-        if _ATTACKS_DIR in Path(item.path).parents:
-            item.add_marker(pytest.mark.slow)
+        if _ATTACKS_DIR not in Path(item.path).parents:
+            continue
+        item.add_marker(pytest.mark.slow)
+        item.add_marker(pytest.mark.attack)
+        if not requested:
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")

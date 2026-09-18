@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 from enum import Enum
 import shlex
 
@@ -79,14 +79,26 @@ def parse_solution_tag(tag: str) -> SolutionTagExpectation:
 
 
 def match_solution_tag(
-    expectation: SolutionTagExpectation, observed: list[Verdict]
+    expectation: SolutionTagExpectation,
+    observed: list[Verdict],
+    test_names: list[str] | None = None,
 ) -> str | None:
-    """Return a mismatch reason, or None if the observed verdicts fit the tag."""
+    """Return a mismatch reason, or None if the observed verdicts fit the tag.
+
+    ``test_names`` runs parallel to ``observed``; when given, an unexpected
+    verdict says which test produced it. The other two mismatches are
+    statements about the whole set - there is no single test to name.
+    """
     if expectation.ignored:
         return None
-    for verdict in observed:
+    if test_names is not None and len(test_names) != len(observed):
+        raise ValueError(
+            f"test_names has {len(test_names)} entries for {len(observed)} verdicts"
+        )
+    for index, verdict in enumerate(observed):
         if verdict not in expectation.permissible:
-            return f"unexpected verdict {verdict.value}"
+            where = "" if test_names is None else f" on {test_names[index]}"
+            return f"unexpected verdict {verdict.value}{where}"
     seen = set(observed)
     missing = [verdict for verdict in expectation.required if verdict not in seen]
     if missing:
@@ -401,16 +413,18 @@ class ProblemConfiguration(FrozenModel):
                         )
 
     def _check_solution_tags(self) -> None:
-        """One 'main' solution, and no tag used twice."""
-        seen: dict[str, str] = {}
-        for solution in self.solutions:
-            if solution.tag in seen:
-                raise ValueError(
-                    f"duplicate solution tag {solution.tag!r}: "
-                    f"{seen[solution.tag]} and {solution.file}"
-                )
-            seen[solution.tag] = solution.file
-        if self.solutions and "main" not in seen:
+        """Exactly one 'main'. Every other tag may repeat.
+
+        A tag is a verdict expectation, not a name (see ProblemSolution.name),
+        so three solutions tagged ``WA`` - three different bugs - are normal.
+        Uniqueness belongs to names alone; see _check_solution_names.
+        """
+        mains = [solution for solution in self.solutions if solution.tag == "main"]
+        if len(mains) > 1:
+            raise ValueError(
+                f"duplicate 'main' solution: {mains[0].file} and {mains[1].file}"
+            )
+        if self.solutions and not mains:
             raise ValueError("a problem with solutions needs one tagged 'main'")
 
     def _check_solution_names(self) -> None:
@@ -486,8 +500,16 @@ class ProblemConfiguration(FrozenModel):
 
 
 class ContestStatementConfig(FrozenModel):
-    """How a contest's statement booklet looks, from olympdev.json."""
+    """How a contest's booklet looks *in one language*, from olympdev.json.
 
+    Everything here is language-specific, because all of it is printed: a
+    contest has a Russian name and an English one, and its venue and date are
+    written differently in each. Shaped like a problem's ``statements`` entry
+    (see :class:`StatementSpec`) so both files address a language the same
+    way.
+    """
+
+    lang: str
     title: str
     location: str = ""
     date: str
@@ -497,6 +519,52 @@ class ContestStatementConfig(FrozenModel):
     #: Directories (relative to the contest dir) staged into the sandbox -
     #: for a sponsor logo, shared branding, etc.
     assets: list[str] = []
+
+
+class ContestConfiguration(FrozenModel):
+    """A contest's olympdev.json: which problems it holds, and its booklet."""
+
+    #: Subdirectory names, in the order the booklet presents them.
+    problems: list[str] = []
+    #: Booklet metadata, one entry per language.
+    statements: list[ContestStatementConfig] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_the_single_language_shape(cls, data: Any) -> Any:
+        """A contest used to carry one `statement` object for every language.
+
+        Refuse it by name rather than as an unknown field, so an existing
+        olympdev.json says what to do instead of "extra inputs".
+        """
+        if isinstance(data, dict) and "statement" in data:
+            raise ValueError(
+                "'statement' is now 'statements': a list with one entry per "
+                'language, each carrying its own "lang", "title", '
+                '"location" and "date"'
+            )
+        return data
+
+    @model_validator(mode="after")
+    def _check_problems(self) -> Self:
+        if not self.problems:
+            raise ValueError("a contest needs a non-empty problems list")
+        for name in self.problems:
+            # A problem name addresses a subdirectory, so it must stay one.
+            if not name or "/" in name or name in (".", ".."):
+                raise ValueError(f"invalid problem name: {name!r}")
+        if len(set(self.problems)) != len(self.problems):
+            raise ValueError("a problem is listed twice")
+        langs = [item.lang for item in self.statements]
+        if len(set(langs)) != len(langs):
+            raise ValueError("two contest statements share a lang")
+        return self
+
+    def statement_by_lang(self, lang: str) -> ContestStatementConfig | None:
+        for item in self.statements:
+            if item.lang == lang:
+                return item
+        return None
 
 
 def _resolve_problem_path(problem_dir: Path, relative: str) -> Path:

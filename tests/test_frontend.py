@@ -68,7 +68,7 @@ def _verification_report_with_groups() -> VerificationReportView:
         tag="WA",
         verdict=Verdict.WA,
         matched=False,
-        reason="group 2 (tests/g2-01.txt): unexpected verdict WA",
+        reason="group 2: unexpected verdict WA on tests/g2-01.txt",
         total_points=40,
         max_points=100,
         groups=[
@@ -83,7 +83,7 @@ def _verification_report_with_groups() -> VerificationReportView:
                 passed=False,
                 failing_tests=["tests/g2-01.txt"],
                 tag_checked=True,
-                tag_reason="group 2 (tests/g2-01.txt): unexpected verdict WA",
+                tag_reason="unexpected verdict WA on tests/g2-01.txt",
             ),
         ],
     )
@@ -96,9 +96,38 @@ def _verification_report_with_groups() -> VerificationReportView:
     )
 
 
+def test_two_solutions_sharing_a_tag_are_reported_apart():
+    """Tags repeat now, so a reason line must be labelled by name, not tag."""
+    view = VerificationReportView(
+        matched=False,
+        status=PipelineStatus.COMPLETED,
+        problem_name="aplusb",
+        test_names=[],
+        columns=[
+            SolutionColumnView(
+                name="sol-overflow",
+                tag="WA",
+                verdict=Verdict.OK,
+                matched=False,
+                reason="missing required verdict WA",
+            ),
+            SolutionColumnView(
+                name="sol-off-by-one",
+                tag="WA",
+                verdict=Verdict.RE,
+                matched=False,
+                reason="unexpected verdict RE on tests/03.txt",
+            ),
+        ],
+    )
+    rendered = text_view.render_verification_report(view)
+    assert "sol-overflow: missing required verdict WA" in rendered
+    assert "sol-off-by-one: unexpected verdict RE on tests/03.txt" in rendered
+
+
 def test_text_verification_report_shows_group_scores():
     rendered = text_view.render_verification_report(_verification_report_with_groups())
-    assert "WA: 40/100" in rendered
+    assert "sol-overflow: 40/100" in rendered
     assert "[OK] group 1 small: 40/40" in rendered
     assert "[--] group 2 large: 0/60" in rendered
     assert "unexpected verdict WA" in rendered
@@ -120,8 +149,111 @@ def test_ungrouped_report_renders_no_group_markup():
 
     rendered = text_view.render_verification_report(_verification_report())
     assert "group" not in rendered
+    assert "stderr" not in rendered, "a report with nothing to diagnose stays quiet"
     markup = html_view.render_verification_report(_verification_report())
     assert '<div class="od-subgrid">' not in markup
+
+
+DIGEST = "a" * 64
+OTHER_DIGEST = "b" * 64
+
+
+def _run_view(verdict: Verdict, **row) -> PipelineRunView:
+    return PipelineRunView(
+        pipeline_id="p",
+        status=PipelineStatus.COMPLETED,
+        verdict=verdict,
+        problem_name="aplusb",
+        tests=[TestRowView(name="tests/03.txt", verdict=verdict, **row)],
+    )
+
+
+def test_a_failing_run_names_the_stderr_to_read():
+    rendered = text_view.render_pipeline_run(
+        _run_view(Verdict.RE, stderr_digest=DIGEST)
+    )
+    assert f"tests/03.txt: RE  stderr {DIGEST}" in rendered
+
+
+def test_a_passing_run_offers_no_digests():
+    rendered = text_view.render_pipeline_run(
+        _run_view(Verdict.OK, stdout_digest=DIGEST, stderr_digest=OTHER_DIGEST)
+    )
+    assert "stderr" not in rendered and "stdout" not in rendered
+
+
+def test_digests_flag_lists_every_test():
+    rendered = text_view.render_pipeline_run(
+        _run_view(Verdict.OK, input_digest=DIGEST, stdout_digest=OTHER_DIGEST),
+        digests=True,
+    )
+    assert f"input {DIGEST}" in rendered
+    assert f"stdout {OTHER_DIGEST}" in rendered
+
+
+def test_a_matching_column_diagnoses_nothing():
+    """A WA test on a WA-tagged solution is the point of it, not a symptom."""
+    column = SolutionColumnView(
+        name="sol-wa",
+        tag="WA",
+        verdict=Verdict.WA,
+        matched=True,
+        tests=[
+            TestRowView(name="tests/01.txt", verdict=Verdict.WA, stderr_digest=DIGEST)
+        ],
+    )
+    assert column.diagnostics == []
+
+
+def test_a_mismatching_column_points_at_the_failing_test():
+    column = SolutionColumnView(
+        name="sol-ml",
+        tag="ML",
+        verdict=Verdict.RE,
+        matched=False,
+        reason="unexpected verdict RE on tests/01.txt",
+        tests=[
+            TestRowView(name="tests/01.txt", verdict=Verdict.RE, stderr_digest=DIGEST)
+        ],
+    )
+    view = VerificationReportView(
+        matched=False,
+        status=PipelineStatus.COMPLETED,
+        problem_name="aplusb",
+        test_names=["tests/01.txt"],
+        columns=[column],
+    )
+    rendered = text_view.render_verification_report(view)
+    assert "sol-ml: unexpected verdict RE on tests/01.txt" in rendered
+    assert f"tests/01.txt  stderr {DIGEST}" in rendered
+
+
+def test_an_empty_stream_is_not_offered_as_a_digest(tmp_path: Path):
+    """A digest of zero bytes is nothing to look at, so it is not shown."""
+    from olympdev.storage import FileStorage
+    from olympdev.worker.jobs.sandbox import SandboxJobResult
+    from olympdev.worker.pipelines.problem_test import ProblemTestResult
+
+    storage = FileStorage(tmp_path / "store")
+    empty = storage.upload_bytes(b"")
+    spoken = storage.upload_bytes(b"boom\n")
+    run_digest = SandboxJobResult(
+        stdout_digest=spoken,
+        stderr_digest=empty,
+        meta=IsolateMeta(status="OK", time=0.1, time_wall=0.1),
+    ).upload(storage)
+    row = TestRowView.from_result(
+        storage,
+        ProblemTestResult(
+            name="tests/01.txt",
+            verdict=Verdict.OK,
+            run_digest=run_digest,
+            input_digest=empty,
+        ),
+    )
+    assert row.stdout_digest == spoken
+    assert row.stderr_digest is None
+    assert row.input_digest is None
 
 
 @pytest.mark.parametrize(
@@ -274,15 +406,63 @@ def test_views_render_themselves_in_a_notebook():
     )._repr_html_()
 
 
-def test_view_layer_does_not_need_jinja(monkeypatch):
-    """A worker installs olympdev without the notebook extra; text must still work."""
-    import importlib
+#: Imports the view layer with jinja2 made unimportable, then renders a
+#: report. Run in a subprocess on purpose: reloading a module in-process
+#: re-executes it into the *same* globals dict, so every module that already
+#: imported a class from it keeps a stale reference while the dict gets fresh
+#: classes - which made pydantic reject its own models in whatever test
+#: happened to run next.
+_NO_JINJA_PROGRAM = """
+import sys
 
-    monkeypatch.setitem(sys.modules, "jinja2", None)
-    for name in ("olympdev.frontend.view", "olympdev.frontend.text"):
-        module = importlib.reload(importlib.import_module(name))
-        assert module is not None
-    assert text_view.render_verification_report(_verification_report())
+
+class BlockJinja:
+    def find_spec(self, name, path=None, target=None):
+        if name == "jinja2" or name.startswith("jinja2."):
+            raise ImportError("jinja2 is not installed")
+        return None
+
+
+sys.meta_path.insert(0, BlockJinja())
+
+from olympdev.frontend import text as text_view
+from olympdev.frontend.view import SolutionColumnView, VerificationReportView
+from olympdev.worker.pipeline import PipelineStatus
+from olympdev.worker.verdict import Verdict
+
+view = VerificationReportView(
+    matched=False,
+    status=PipelineStatus.COMPLETED,
+    problem_name="aplusb",
+    test_names=[],
+    columns=[
+        SolutionColumnView(
+            name="sol-wa",
+            tag="WA",
+            verdict=Verdict.OK,
+            matched=False,
+            reason="missing required verdict WA",
+        )
+    ],
+)
+rendered = text_view.render_verification_report(view)
+assert "sol-wa" in rendered, rendered
+assert "jinja2" not in sys.modules
+print("ok")
+"""
+
+
+def test_view_layer_does_not_need_jinja():
+    """A worker may never render HTML; the text report must not need jinja2."""
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-c", _NO_JINJA_PROGRAM],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
 
 
 def test_cli_config_reports_its_source(capsys, tmp_path: Path):
@@ -313,3 +493,10 @@ def test_cli_compile_commands_still_works(capsys, tmp_path: Path):
     assert written.is_file()
     entries = json.loads(written.read_text())
     assert entries and all("arguments" in entry for entry in entries)
+
+
+def test_cli_compile_commands_takes_a_directory(capsys):
+    """Every other command accepts a directory target; this one used to
+    hand back an IsADirectoryError traceback instead."""
+    assert main(["compile-commands", str(CONTEST / "aplusb")]) == 0
+    assert capsys.readouterr().out.strip()

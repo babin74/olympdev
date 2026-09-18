@@ -33,6 +33,11 @@
     </table>
     </div>
     {% endif %}
+    {% for test in view.diagnostics %}
+    <p class="od-muted" style="margin:10px 0 0">
+        {{ test.name }} stderr <code>{{ test.stderr_digest }}</code>
+    </p>
+    {% endfor %}
     {% if view.output_digest %}
     <p class="od-muted" style="margin:10px 0 0">
         result <code>{{ view.output_digest }}</code>

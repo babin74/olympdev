@@ -25,6 +25,9 @@
                     </div>
                     <div class="od-muted">cpu/wall {{ column.time_text }}</div>
                     {% if column.reason %}<div class="od-muted">{{ column.reason }}</div>{% endif %}
+                    {% for test in column.diagnostics %}
+                    <div class="od-muted">{{ test.name }} stderr <code>{{ test.stderr_digest }}</code></div>
+                    {% endfor %}
                     {% if column.groups %}
                     <div class="od-subgrid">
                         <div class="od-strong">{{ column.score_text }}</div>

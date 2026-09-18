@@ -6,6 +6,21 @@ from olympdev.isolate import IsolateFactory
 from olympdev.settings import Settings, set_settings
 from olympdev.storage.filestorage import FileStorage
 
+RUN_ATTACKS_OPTION = "--run-attacks"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        RUN_ATTACKS_OPTION,
+        action="store_true",
+        default=False,
+        help=(
+            "also run tests/attacks: adversarial payloads (fork bombs, memory "
+            "hogs, host-file reads) executed for real. Opt-in on purpose - "
+            "they must never start by accident."
+        ),
+    )
+
 
 @pytest.fixture(autouse=True)
 def default_settings():

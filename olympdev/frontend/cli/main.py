@@ -51,7 +51,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     failed = False
     for name in names:
         view = workbench.problem(name).run(args.solution)
-        _emit(view, args, text_view.render_pipeline_run(view))
+        _emit(view, args, text_view.render_pipeline_run(view, digests=args.digests))
         failed = failed or (view.verdict is None or view.verdict.value != "OK")
     return 1 if failed and args.strict else 0
 
@@ -62,13 +62,30 @@ def cmd_verify(args: argparse.Namespace) -> int:
     failed = False
     for name in names:
         view = workbench.problem(name).verify(args.solution)
-        _emit(view, args, text_view.render_verification_report(view))
+        _emit(
+            view,
+            args,
+            text_view.render_verification_report(view, digests=args.digests),
+        )
         failed = failed or not view.matched
     return 1 if failed else 0
 
 
 def cmd_statement(args: argparse.Namespace) -> int:
     workbench = _workbench(args)
+    if args.contest:
+        if args.problem:
+            print("error: --contest typesets every problem, so --problem "
+                  "cannot narrow it", file=sys.stderr)
+            return 2
+        view = workbench.statement(args.lang)
+        print(text_view.render_statement_result(view))
+        if view.pdf_digest is None:
+            return 1
+        if args.out is not None:
+            workbench.storage.download_file(view.pdf_digest, args.out)
+            print(f"wrote {args.out}", file=sys.stderr)
+        return 0
     names = [args.problem] if args.problem else workbench.problems()
     if args.out is not None and len(names) > 1:
         print("error: --out needs a single problem (pass --problem)", file=sys.stderr)
@@ -115,6 +132,50 @@ def cmd_compile_commands(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_new(args: argparse.Namespace) -> int:
+    from olympdev.problem.scaffold import (
+        contest_file_for,
+        new_contest,
+        new_problem,
+        register_problem,
+    )
+
+    if args.kind == "contest":
+        if not args.problem:
+            print(
+                "error: new contest needs --problem NAME (a contest lists its "
+                "problems, and an empty one will not load)",
+                file=sys.stderr,
+            )
+            return 2
+        written = new_contest(args.path, problem=args.problem, title=args.title)
+    else:
+        written = new_problem(args.path, title=args.title)
+        # A problem created inside a contest but left out of its list would
+        # silently not exist, so list it.
+        contest_file = contest_file_for(Path(args.path))
+        if contest_file is not None:
+            register_problem(contest_file, Path(args.path).name)
+            print(f"listed in {contest_file}", file=sys.stderr)
+    for path in written:
+        print(path)
+    return 0
+
+
+def cmd_schema(args: argparse.Namespace) -> int:
+    from olympdev.problem.types import ContestConfiguration, ProblemConfiguration
+
+    model = ProblemConfiguration if args.kind == "info" else ContestConfiguration
+    rendered = json.dumps(model.model_json_schema(), indent=2, ensure_ascii=False)
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(rendered + "\n", encoding="utf-8")
+        print(f"wrote {args.out}", file=sys.stderr)
+    else:
+        print(rendered)
+    return 0
+
+
 def cmd_show(args: argparse.Namespace) -> int:
     storage = open_storage(get_settings())
     content = storage.download_bytes(args.digest)
@@ -158,11 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--problem", help="problem name inside a contest")
         sub.add_argument("--jobs", type=int, default=None, help="parallel sandboxes")
         sub.add_argument("--html", type=Path, help="also write the report as HTML")
+        sub.add_argument(
+            "--digests",
+            action="store_true",
+            help="list each test's input/stdout/stderr digests for `olympdev show`",
+        )
 
     run = subparsers.add_parser("run", help="test a solution against a problem")
     add_target(run)
     run.add_argument(
-        "--solution", default=None, help="solution name, its file's stem (default: main)"
+        "--solution",
+        default=None,
+        help="solution name, its file's stem (default: the solution tagged 'main')",
     )
     run.add_argument(
         "--strict", action="store_true", help="exit non-zero unless the verdict is OK"
@@ -194,7 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
     statement.add_argument("--jobs", type=int, default=None, help="parallel sandboxes")
     statement.add_argument("--lang", required=True, help="statement language, e.g. ru")
     statement.add_argument("--out", type=Path, help="also save the compiled PDF here")
-    statement.set_defaults(func=cmd_statement, html=None)
+    statement.add_argument(
+        "--contest",
+        action="store_true",
+        help="one booklet for the whole contest instead of a PDF per problem "
+             "(needs a 'statement' section in olympdev.json)",
+    )
+    statement.set_defaults(func=cmd_statement, html=None, digests=False)
 
     stress = subparsers.add_parser(
         "stress", help="stress a candidate solution against a reference on growing seeds"
@@ -225,8 +299,36 @@ def build_parser() -> argparse.ArgumentParser:
     compile_commands = subparsers.add_parser(
         "compile-commands", help="generate a compilation database for an IDE"
     )
-    compile_commands.add_argument("target", type=Path)
+    compile_commands.add_argument(
+        "target",
+        type=Path,
+        nargs="?",
+        default=Path.cwd(),
+        help="contest directory, olympdev.json, problem directory or info.json",
+    )
     compile_commands.set_defaults(func=cmd_compile_commands, html=None)
+
+    new = subparsers.add_parser(
+        "new", help="create a working contest or problem skeleton"
+    )
+    new.add_argument("kind", choices=("contest", "problem"))
+    new.add_argument("path", type=Path, help="directory to create")
+    new.add_argument(
+        "--problem", help="first problem to create inside a new contest (required)"
+    )
+    new.add_argument("--title", help="statement title (default: the directory name)")
+    new.set_defaults(func=cmd_new, html=None)
+
+    schema = subparsers.add_parser(
+        "schema", help="print the JSON schema of info.json or olympdev.json"
+    )
+    schema.add_argument(
+        "kind",
+        choices=("info", "contest"),
+        help="'info' for a problem's info.json, 'contest' for olympdev.json",
+    )
+    schema.add_argument("--out", type=Path, help="write the schema here instead")
+    schema.set_defaults(func=cmd_schema, html=None)
 
     show = subparsers.add_parser("show", help="print a blob from storage by digest")
     show.add_argument("digest")
@@ -249,7 +351,11 @@ def main(argv: list[str] | None = None) -> int:
         args.jobs = get_settings().isolate.sandbox_count
     try:
         return args.func(args)
-    except (FileNotFoundError, KeyError, ValueError) as exc:
+    except (OSError, KeyError, ValueError, RuntimeError) as exc:
+        # A bad info.json, a directory where a file was expected, a missing
+        # compiler: all of these are the user's situation, not a defect, so
+        # they read as one line instead of a traceback. OSError covers
+        # FileNotFoundError and IsADirectoryError alike.
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

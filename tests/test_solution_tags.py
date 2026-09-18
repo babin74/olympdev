@@ -115,19 +115,36 @@ def test_match_solution_tag(tag, observed, reason):
         assert actual is not None and reason in actual
 
 
-def test_compound_and_optional_tags_are_unique_like_any_other():
-    with pytest.raises(ValidationError, match="duplicate solution tag 'TL\\+ML\\?'"):
-        ProblemConfiguration.model_validate(
-            {
-                "time_limit_ms": 1000,
-                "memory_limit_mb": 64,
-                "solutions": [
-                    {"file": "a.cpp", "tag": "main"},
-                    {"file": "b.cpp", "tag": "TL+ML?"},
-                    {"file": "c.cpp", "tag": "TL+ML?"},
-                ],
-            }
+def test_an_unexpected_verdict_names_the_test_it_came_from():
+    reason = match_solution_tag(
+        parse_solution_tag("WA"),
+        [Verdict.OK, Verdict.RE],
+        ["tests/01.txt", "tests/02.txt"],
+    )
+    assert reason == "unexpected verdict RE on tests/02.txt"
+
+
+def test_match_solution_tag_rejects_a_mismatched_name_list():
+    with pytest.raises(ValueError, match="1 entries for 2 verdicts"):
+        match_solution_tag(
+            parse_solution_tag("WA"), [Verdict.OK, Verdict.WA], ["tests/01.txt"]
         )
+
+
+def test_compound_and_optional_tags_may_repeat():
+    """A tag is a verdict expectation; two solutions may share one."""
+    config = ProblemConfiguration.model_validate(
+        {
+            "time_limit_ms": 1000,
+            "memory_limit_mb": 64,
+            "solutions": [
+                {"file": "a.cpp", "tag": "main"},
+                {"file": "b.cpp", "tag": "TL+ML?"},
+                {"file": "c.cpp", "tag": "TL+ML?"},
+            ],
+        }
+    )
+    assert [solution.tag for solution in config.solutions[1:]] == ["TL+ML?", "TL+ML?"]
 
 
 def test_new_tags_load_alongside_main():

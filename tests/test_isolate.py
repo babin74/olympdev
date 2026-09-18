@@ -49,7 +49,10 @@ def test_sandbox_run(isolate_sandbox):
     assert meta.exitsig == 0
     assert meta.killed is False
     assert meta.cg_oom_killed is False
-    assert meta.time > 0
+    # isolate reports CPU time in milliseconds, and `echo` can legitimately
+    # finish inside one - so 0.000 is a real value, not a parse failure.
+    # time_wall below is what proves the clocks were read at all.
+    assert meta.time >= 0
     assert meta.time_wall > 0
     assert meta.max_rss_kb > 0
     assert meta.cg_memory_kb > 0

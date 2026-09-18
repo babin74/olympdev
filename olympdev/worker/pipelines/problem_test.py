@@ -189,6 +189,10 @@ class ProblemTestResult(StorageModel):
     verdict: Verdict
     run_digest: str | None
     check_digest: str | None = None
+    #: The bytes this test fed the solution, whether they came from a file or
+    #: from the generator. Reporting it is what lets an author read a test
+    #: back with ``olympdev show`` instead of regenerating it by hand.
+    input_digest: str | None = None
 
 
 class ProblemTestPipeline(AbstractPipeline):
@@ -542,6 +546,19 @@ class ProblemTestPipeline(AbstractPipeline):
                 verdict=verdict,
                 run_digest=run_digest,
                 check_digest=check_digest,
+                input_digest=self._resolved_input_digest(storage, args),
             ).upload(storage)
         )
         return NextJobStatus.FINISHED
+
+    def _resolved_input_digest(
+        self, storage: AbstractStorage, args: ProblemTestArguments
+    ) -> str | None:
+        """This test's input, from its file or from the generator that made it.
+
+        Read back out of the step table rather than remembered, so a restored
+        pipeline resolves it the same way ``_ensure_input`` does.
+        """
+        if args.input_digest is not None:
+            return args.input_digest
+        return self.generated_input_digest(storage)

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import olympdev
+from olympdev.problem.package import resolve_target_config
 
 _SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx"}
 _SOURCE_DIRS = ("source", "solutions", "files")
@@ -131,7 +132,10 @@ def info_path_for(problem_dir: Path, config_path: Path) -> Path:
     return problem_dir / "info.json"
 
 
-def collect_outputs(config_path: Path) -> dict[Path, list[dict[str, Any]]]:
+def collect_outputs(target: Path) -> dict[Path, list[dict[str, Any]]]:
+    # Same target grammar as every other command: a contest directory, an
+    # olympdev.json, a problem directory or an info.json.
+    config_path = resolve_target_config(target)
     data = load_json(config_path)
     grouped: dict[Path, list[dict[str, Any]]] = defaultdict(list)
     for problem_dir in problem_directories(config_path, data):

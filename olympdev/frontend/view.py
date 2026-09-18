@@ -17,12 +17,13 @@ from olympdev.isolate import IsolateMeta
 from olympdev.problem.scoring import check_solution_group_tags, score_solution
 from olympdev.problem.types import ProblemConfiguration, ProblemScoringMode, ProblemSolution
 from olympdev.schema import FrozenModel
-from olympdev.storage import AbstractStorage
+from olympdev.storage import EMPTY_BLOB_DIGEST, AbstractStorage
 from olympdev.worker.job import AbstractJob, JobStatus
 from olympdev.worker.pipeline import AbstractPipeline, PipelineStatus
 from olympdev.worker.pipelines.problem_test import ProblemTestResult
 from olympdev.worker.pipelines.problem_testing import ProblemTestingResult
 from olympdev.worker.pipelines.problem_verification import ProblemVerificationResult
+from olympdev.worker.pipelines.statement import StatementPipeline
 from olympdev.worker.pipelines.stress import StressResult
 from olympdev.worker.verdict import Verdict
 
@@ -135,6 +136,14 @@ class TestRowView(FrozenModel):
     usage: UsageView = EMPTY_USAGE
     run_digest: str | None = None
     check_digest: str | None = None
+    #: What the solution wrote on this test, straight from the sandbox. The
+    #: answer to a test is ``stdout_digest`` of a run of the main solution;
+    #: ``stderr_digest`` is where a crash explains itself. Both are None when
+    #: the stream was empty - see :func:`_run_details`.
+    stdout_digest: str | None = None
+    stderr_digest: str | None = None
+    #: What the solution was fed, file-backed or generated.
+    input_digest: str | None = None
     #: Which group this test scores into, when the problem uses group-points.
     #: None for an ungrouped problem, or when no configuration was given.
     group_id: int | None = None
@@ -147,27 +156,63 @@ class TestRowView(FrozenModel):
         *,
         group_id: int | None = None,
     ) -> Self:
+        usage, stdout_digest, stderr_digest = _run_details(storage, result.run_digest)
         return cls(
             name=result.name,
             verdict=result.verdict,
-            usage=_run_usage(storage, result.run_digest),
+            usage=usage,
             run_digest=result.run_digest,
             check_digest=result.check_digest,
+            stdout_digest=stdout_digest,
+            stderr_digest=stderr_digest,
+            input_digest=_non_empty(result.input_digest),
             group_id=group_id,
         )
 
 
-def _run_usage(storage: AbstractStorage, run_digest: str | None) -> UsageView:
+def _non_empty(digest: str | None) -> str | None:
+    """Drop a digest that points at zero bytes - it is nothing to look at."""
+    return None if digest is None or digest == EMPTY_BLOB_DIGEST else digest
+
+
+def _run_details(
+    storage: AbstractStorage, run_digest: str | None
+) -> tuple[UsageView, str | None, str | None]:
+    """Usage and the run's output digests, from the one blob that holds them.
+
+    Timing and the stdout/stderr digests all live in the same
+    ``SandboxJobResult``, so a report that shows both costs no more storage
+    round trips than one that shows only the clock.
+    """
     if run_digest is None:
-        return EMPTY_USAGE
+        return EMPTY_USAGE, None, None
     from olympdev.worker.jobs.sandbox import SandboxJobResult
 
     result: SandboxJobResult | None = SandboxJobResult.from_storage(
         storage, run_digest
     )
     if result is None:
-        return EMPTY_USAGE
-    return UsageView.from_meta(result.meta)
+        return EMPTY_USAGE, None, None
+    return (
+        UsageView.from_meta(result.meta),
+        _non_empty(result.stdout_digest),
+        _non_empty(result.stderr_digest),
+    )
+
+
+#: How many failing tests a report explains before it starts repeating itself.
+#: A solution that times out does so on many tests; the first few carry the
+#: diagnosis, the rest are noise.
+_MAX_DIAGNOSTICS = 3
+
+
+def _diagnostics(tests: list["TestRowView"], limit: int) -> list["TestRowView"]:
+    """Failing tests that left something to read behind."""
+    return [
+        test
+        for test in tests
+        if test.verdict is not Verdict.OK and test.stderr_digest is not None
+    ][:limit]
 
 
 def _cpu_seconds(tests: list["TestRowView"]) -> float | None:
@@ -236,6 +281,11 @@ class PipelineRunView(FrozenModel):
     @property
     def verdict_text(self) -> str:
         return "—" if self.verdict is None else self.verdict.value
+
+    @property
+    def diagnostics(self) -> list[TestRowView]:
+        """Failing tests worth pointing a reader at, worst-first by position."""
+        return _diagnostics(self.tests, _MAX_DIAGNOSTICS)
 
     @property
     def cpu_seconds(self) -> float | None:
@@ -315,6 +365,17 @@ class SolutionColumnView(FrozenModel):
         return f"{self.total_points}/{self.max_points}"
 
     @property
+    def diagnostics(self) -> list[TestRowView]:
+        """Failing tests to explain - only when the solution did not match.
+
+        A WA on a solution tagged ``WA`` is the point of that solution, not a
+        symptom, so a matching column has nothing to diagnose.
+        """
+        if self.matched is not False:
+            return []
+        return _diagnostics(self.tests, 1)
+
+    @property
     def peak_cpu_ms(self) -> float | None:
         return _peak_usage(self.tests)[0]
 
@@ -352,17 +413,10 @@ class VerificationReportView(FrozenModel):
         problem_name: str | None = None,
         wall_seconds: float | None = None,
         jobs: list[JobView] | None = None,
-        solution_names: dict[str, str] | None = None,
         configuration: ProblemConfiguration | None = None,
         solutions: list[ProblemSolution] | None = None,
     ) -> Self:
-        """``solution_names`` maps a solution's tag to its display name.
-
-        The pipeline only ever sees tags - the file a tag came from is a
-        submitter-side fact, so the caller (which holds the ``ProblemPackage``)
-        supplies it. Falls back to the tag itself when not given.
-
-        ``configuration``/``solutions`` are optional and additive: when
+        """``configuration``/``solutions`` are optional and additive: when
         ``configuration`` is omitted (every caller before group-points scoring
         existed), the report is unchanged. When given and the problem's
         ``mode`` is ``"group-points"``, each column also gets a per-group
@@ -371,7 +425,7 @@ class VerificationReportView(FrozenModel):
         ``ProblemConfiguration``.
         """
         result = _verification_result(pipeline, storage)
-        solution_by_tag = {item.tag: item for item in (solutions or [])}
+        solution_by_name = {item.name: item for item in (solutions or [])}
         group_id_by_test_name = _group_id_by_test_name(configuration)
         columns: list[SolutionColumnView] = []
         if result is not None:
@@ -403,7 +457,7 @@ class VerificationReportView(FrozenModel):
                     score = score_solution(configuration, verdicts)
                     total_points = score.total_points
                     max_points = score.max_points
-                    matched_solution = solution_by_tag.get(spec.tag)
+                    matched_solution = solution_by_name.get(spec.name)
                     tag_checked = (
                         matched_solution is not None
                         and matched_solution.group_tags is not None
@@ -416,14 +470,8 @@ class VerificationReportView(FrozenModel):
                     for group_score in score.groups:
                         tag_reason = tag_reasons.get(group_score.group.id)
                         if tag_reason is not None:
-                            location = (
-                                f" ({group_score.failing_tests[0]})"
-                                if group_score.failing_tests
-                                else ""
-                            )
-                            named_reason = (
-                                f"group {group_score.group.id}{location}: {tag_reason}"
-                            )
+                            # tag_reason already names the offending test.
+                            named_reason = f"group {group_score.group.id}: {tag_reason}"
                             reason = _merge_reason(reason, named_reason)
                             matched = False
                         groups.append(
@@ -447,7 +495,7 @@ class VerificationReportView(FrozenModel):
                         )
                 columns.append(
                     SolutionColumnView(
-                        name=(solution_names or {}).get(spec.tag, spec.tag),
+                        name=spec.name,
                         tag=spec.tag,
                         verdict=None if testing is None else testing.verdict,
                         matched=matched,
@@ -520,22 +568,38 @@ class StatementResultView(FrozenModel):
     failure_reason: str | None = None
     wall_seconds: float | None = None
     pdf_digest: str | None = None
+    #: TeX's .log and the compiler's streams. On a failed build these are the
+    #: whole diagnosis, and a failed build has no PDF digest to print instead.
+    log_digest: str | None = None
+    stdout_digest: str | None = None
+    stderr_digest: str | None = None
     jobs: list[JobView] = []
 
     @classmethod
     def from_pipeline(
         cls,
         pipeline: AbstractPipeline,
+        storage: AbstractStorage | None = None,
         *,
         problem_name: str | None = None,
         lang: str | None = None,
         wall_seconds: float | None = None,
         jobs: list[JobView] | None = None,
     ) -> Self:
+        compile_result = None
+        if storage is not None and isinstance(pipeline, StatementPipeline):
+            compile_result = pipeline.compile_result(storage)
         return cls(
             status=pipeline.get_status(),
             problem_name=problem_name,
             lang=lang,
+            log_digest=None if compile_result is None else compile_result.log_digest,
+            stdout_digest=(
+                None if compile_result is None else compile_result.stdout_digest
+            ),
+            stderr_digest=(
+                None if compile_result is None else compile_result.stderr_digest
+            ),
             failure_reason=(
                 None
                 if pipeline.get_failure_reason() is None

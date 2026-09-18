@@ -26,12 +26,8 @@ JobRenderContext = JobView
 
 @cache
 def _environment():
-    try:
-        from jinja2 import Environment, FileSystemLoader
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on install
-        raise ModuleNotFoundError(
-            "HTML rendering needs jinja2: pip install 'olympdev[notebook]'"
-        ) from exc
+    from jinja2 import Environment, FileSystemLoader
+
     return Environment(loader=FileSystemLoader(_TEMPLATES), autoescape=True)
 
 

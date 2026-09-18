@@ -142,6 +142,22 @@ class StatementPipeline(AbstractPipeline):
         self.complete(result.pdf_digest)
         return NextJobStatus.FINISHED
 
+    def compile_result(self, storage: AbstractStorage) -> StatementCompileResult | None:
+        """The compile job's own result, success or failure.
+
+        The pipeline's output digest is the PDF, which a failed build does not
+        have - but its log and output streams are exactly what a failed build
+        needs to be diagnosable, so they are reachable from here. Read out of
+        the step table, so a restored pipeline finds them too.
+        """
+        step = self.step(_COMPILE_STEP)
+        if step is None:
+            return None
+        digest = step.job.get_output_digest()
+        if digest is None:
+            return None
+        return StatementCompileResult.from_storage(storage, digest)
+
     def _ensure_children(self, args: StatementBuildInput) -> list[ScheduledPipeline]:
         if not self._children:
             for index, digest in enumerate(args.answer_testing_digests):
