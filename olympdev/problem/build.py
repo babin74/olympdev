@@ -205,13 +205,13 @@ def build_problem_verification_input(
 
 
 def _statement_fragment_sources(
-    package: ProblemPackage, spec: StatementSpec
+    package: ProblemPackage, spec: StatementSpec, sample_prefix: str = ""
 ) -> tuple[str, list[tuple[Path | bytes, str]], list[tuple[str, ProblemTest]]]:
     """Render one problem's fragment, the sample/asset files it needs staged,
     and any samples whose answer still needs computing (see
     ``_build_answer_batch``)."""
     body = package.file(spec.source).read_text(encoding="utf-8")
-    samples = read_samples(package)
+    samples = read_samples(package, sample_prefix)
     template_text = (
         package.file(spec.template).read_text(encoding="utf-8")
         if spec.template is not None
@@ -410,7 +410,7 @@ def build_contest_statement_input(
     fragment_sources: list[list[tuple[Path | bytes, str]]] = []
     answer_testing_digests: list[str] = []
     engine: StatementEngine | None = None
-    for name, package in contest.problems.items():
+    for index, (name, package) in enumerate(contest.problems.items(), 1):
         try:
             spec = package.statement_spec(lang)
         except KeyError:
@@ -424,7 +424,11 @@ def build_contest_statement_input(
                 f"{name}: statement engine {spec.engine.value!r} does not match "
                 f"the rest of the contest ({engine.value!r})"
             )
-        fragment, sources, pending = _statement_fragment_sources(package, spec)
+        # Every problem numbers its samples from 0, and they all land in one
+        # sandbox.
+        fragment, sources, pending = _statement_fragment_sources(
+            package, spec, sample_prefix=f"problem{index}-"
+        )
         fragments.append(fragment)
         fragment_sources.append(sources)
         if pending:

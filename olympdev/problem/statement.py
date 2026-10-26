@@ -84,8 +84,11 @@ def render_template(template_text: str, context: dict[str, Any]) -> str:
     return _jinja_environment().from_string(template_text).render(**context)
 
 
-def read_samples(package: ProblemPackage) -> SampleFiles:
+def read_samples(package: ProblemPackage, prefix: str = "") -> SampleFiles:
     """Each sample's input file, plus its output file when one is on disk.
+
+    ``prefix`` goes in front of every stem: a contest booklet stages all its
+    problems' samples into one sandbox, so each problem needs its own.
 
     Statement building needs a real input file to hand ``\\exmpfile``; a
     sample produced by a generator (``gen_cmd``, no ``input_file`` on disk)
@@ -102,7 +105,7 @@ def read_samples(package: ProblemPackage) -> SampleFiles:
             )
         samples.append(
             SampleEntry(
-                stem=f"sample-{index}",
+                stem=f"{prefix}sample-{index}",
                 input_path=package.file(test.input_file),
                 output_path=(
                     package.file(test.output_file) if test.output_file is not None else None
