@@ -78,7 +78,7 @@ def test_simple_run_job_make_input_digest(storage: FileStorage, hello_binary: by
     assert arguments["time_limit_ms"] == 1000
     assert arguments["wall_time_ms"] == 1000
     assert arguments["memory_limit_mb"] == 64
-    assert arguments["cg_memory_limit_kb"] == 64 * 256
+    assert arguments["cg_memory_limit_kb"] == 64 * 1024
     assert arguments["aspace_limit_kb"] is None
     assert arguments["file_size_limit_kb"] == 1024 * 16
 

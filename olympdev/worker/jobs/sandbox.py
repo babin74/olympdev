@@ -102,7 +102,7 @@ def build_job_limits(
     file_size_limit_kb: int = _DEFAULT_FILE_SIZE_LIMIT_KB,
 ) -> IsolateLimits:
     if cg_memory_limit_kb is None:
-        cg_memory_limit_kb = memory_limit_mb * 256
+        cg_memory_limit_kb = memory_limit_mb * 1024
     return IsolateLimits(
         time_limit_ms=time_limit_ms,
         wall_time_ms=wall_time_ms,
